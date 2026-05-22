@@ -1,0 +1,55 @@
+# AppK3s management UI — routes appk3s.w0.app.syit.fr → Vite dev server on master node
+# Apply with: kubectl apply -f k8s/appk3s-ingress.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: appk3s-web
+  namespace: default
+  labels:
+    app: appk3s-web
+spec:
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: appk3s-web-eps
+  namespace: default
+  labels:
+    kubernetes.io/service-name: appk3s-web
+addressType: IPv4
+endpoints:
+  - addresses:
+      - "192.168.188.10"   # master node LAN IP (dokploymanager01)
+    conditions:
+      ready: true
+ports:
+  - name: http
+    port: 3001
+    protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: appk3s
+  namespace: default
+  labels:
+    app: appk3s
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: appk3s.w0.app.syit.fr
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: appk3s-web
+                port:
+                  number: 3001

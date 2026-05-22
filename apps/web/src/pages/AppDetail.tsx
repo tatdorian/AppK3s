@@ -9,6 +9,9 @@ import {
   Globe,
   Rocket,
   Loader2,
+  ExternalLink,
+  Network,
+  Server,
 } from 'lucide-react';
 import { useApp, useAppStatus, useDeployments, useUpdateApp, useDeleteApp } from '../hooks/useApps.js';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -72,6 +75,7 @@ export function AppDetail() {
 
   const hostname =
     app.subdomain && app.domain ? `${app.subdomain}.${app.domain}` : null;
+  const accessUrl = status?.accessUrl;
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
@@ -157,6 +161,20 @@ export function AppDetail() {
         </div>
       </div>
 
+      {/* Access URL banner */}
+      {accessUrl && (
+        <a
+          href={accessUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-2 mb-4 px-4 py-3 rounded-lg bg-accent/10 border border-accent/30 text-accent hover:bg-accent/15 transition-colors"
+        >
+          <Globe className="w-4 h-4 shrink-0" />
+          <span className="text-sm font-medium truncate">{accessUrl}</span>
+          <ExternalLink className="w-3.5 h-3.5 shrink-0 ml-auto" />
+        </a>
+      )}
+
       {/* Quick info bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <div className="card p-3">
@@ -191,6 +209,48 @@ export function AppDetail() {
         </div>
       </div>
 
+      {/* Service ports */}
+      {status?.servicePorts && status.servicePorts.length > 0 && (
+        <div className="card p-4 mb-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Network className="w-3.5 h-3.5 text-slate-400" />
+            <h3 className="text-sm font-semibold text-white">Ports du service</h3>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {status.servicePorts.map((sp) => (
+              <div key={sp.name} className="flex items-center gap-2 bg-surface-300 rounded-lg px-3 py-2">
+                <div>
+                  <span className="text-xs text-slate-400">{sp.name || 'port'}</span>
+                  <div className="flex items-center gap-1 text-sm font-medium text-white">
+                    <span>{sp.port}</span>
+                    <span className="text-slate-500">→</span>
+                    <span className="text-slate-300">{sp.targetPort}</span>
+                    {sp.nodePort && (
+                      <>
+                        <span className="text-slate-500">·</span>
+                        <span className="text-accent">NodePort {sp.nodePort}</span>
+                      </>
+                    )}
+                  </div>
+                  <span className="text-xs text-slate-600">{sp.protocol}</span>
+                </div>
+                {sp.nodePort && (
+                  <a
+                    href={`http://192.168.188.10:${sp.nodePort}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ml-1 p-1 rounded hover:bg-surface-200 text-slate-400 hover:text-accent"
+                    title={`Ouvrir sur NodePort ${sp.nodePort}`}
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="border-b border-slate-700/50 mb-6">
         <nav className="flex gap-1">
@@ -222,7 +282,7 @@ export function AppDetail() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-700/40">
-                    {['Name', 'Phase', 'Ready', 'Restarts', 'Age'].map((h) => (
+                    {['Nom', 'Phase', 'Ready', 'Restarts', 'Âge', 'Node'].map((h) => (
                       <th key={h} className="px-4 py-2 text-left text-xs text-slate-500 font-medium">{h}</th>
                     ))}
                   </tr>
@@ -230,11 +290,17 @@ export function AppDetail() {
                 <tbody>
                   {status.pods.map((pod) => (
                     <tr key={pod.name} className="border-b border-slate-700/20 last:border-0 hover:bg-surface-200/30">
-                      <td className="px-4 py-3 font-mono text-xs text-slate-300">{pod.name}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-300 max-w-[200px] truncate">{pod.name}</td>
                       <td className="px-4 py-3"><StatusBadge status={pod.phase.toLowerCase()} size="sm" /></td>
-                      <td className="px-4 py-3 text-xs">{pod.ready ? '✓' : '✗'}</td>
+                      <td className="px-4 py-3 text-xs">{pod.ready ? <span className="text-emerald-400">✓</span> : <span className="text-red-400">✗</span>}</td>
                       <td className="px-4 py-3 text-xs text-slate-400">{pod.restarts}</td>
                       <td className="px-4 py-3 text-xs text-slate-400">{pod.age}</td>
+                      <td className="px-4 py-3 text-xs text-slate-400">
+                        <span className="flex items-center gap-1">
+                          <Server className="w-3 h-3" />
+                          {pod.node || '—'}
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -255,7 +321,7 @@ export function AppDetail() {
           {/* No pods message */}
           {(!status?.pods || status.pods.length === 0) && app.type !== 'compose' && (
             <div className="card p-6 text-center text-slate-500 text-sm">
-              No pods running — deploy the application to start it.
+              Aucun pod en cours — déployez l'application pour la démarrer.
             </div>
           )}
         </div>
@@ -264,12 +330,12 @@ export function AppDetail() {
       {tab === 'environment' && (
         <div className="card p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-white">Environment Variables</h3>
+            <h3 className="text-sm font-semibold text-white">Variables d'environnement</h3>
             {envVars !== null && (
               <div className="flex gap-2">
-                <button className="btn-ghost text-sm py-1" onClick={() => setEnvVars(null)}>Cancel</button>
+                <button className="btn-ghost text-sm py-1" onClick={() => setEnvVars(null)}>Annuler</button>
                 <button className="btn-primary text-sm py-1" onClick={saveEnv} disabled={updateMut.isPending}>
-                  Save
+                  Sauvegarder
                 </button>
               </div>
             )}
@@ -290,12 +356,12 @@ export function AppDetail() {
       {tab === 'deployments' && (
         <div className="card overflow-hidden">
           {deployments.length === 0 ? (
-            <p className="p-6 text-slate-500 text-sm">No deployments yet.</p>
+            <p className="p-6 text-slate-500 text-sm">Aucun déploiement.</p>
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-700/40">
-                  {['ID', 'Status', 'Started', 'Completed'].map((h) => (
+                  {['ID', 'Statut', 'Démarré', 'Terminé'].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs text-slate-500 font-medium">{h}</th>
                   ))}
                 </tr>

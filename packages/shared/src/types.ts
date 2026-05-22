@@ -74,6 +74,15 @@ export interface K8sPodInfo {
   ready: boolean;
   restarts: number;
   age: string;
+  node: string;
+}
+
+export interface ServicePortInfo {
+  name: string;
+  port: number;
+  targetPort: number;
+  nodePort?: number;
+  protocol: string;
 }
 
 export interface AppStatusInfo {
@@ -81,6 +90,8 @@ export interface AppStatusInfo {
   desiredReplicas: number;
   readyReplicas: number;
   pods: K8sPodInfo[];
+  servicePorts: ServicePortInfo[];
+  accessUrl?: string;
 }
 
 export interface NodeInfo {

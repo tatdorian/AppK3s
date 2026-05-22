@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Play, Square, RotateCcw, Trash2, Globe, Container } from 'lucide-react';
+import { Play, Square, RotateCcw, Trash2, Globe, Container, ExternalLink } from 'lucide-react';
 import type { Application } from '@appk3s/shared';
 import { StatusBadge } from './StatusBadge.js';
 import { relativeTime } from '../lib/utils.js';
@@ -73,16 +73,17 @@ export function AppCard({ app, onDelete }: Props) {
         <StatusBadge status={app.status} />
       </div>
 
-      {/* Domain */}
+      {/* Access URL via Ingress hostname */}
       {hostname && (
         <a
           href={`http${app.tlsEnabled ? 's' : ''}://${hostname}`}
           target="_blank"
           rel="noreferrer"
-          className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-accent transition-colors"
+          className="flex items-center gap-1.5 text-xs text-accent hover:text-accent/80 transition-colors"
         >
           <Globe className="w-3 h-3" />
-          {hostname}
+          <span className="truncate">{hostname}</span>
+          <ExternalLink className="w-2.5 h-2.5 shrink-0" />
         </a>
       )}
 

@@ -1,7 +1,7 @@
 import * as k8s from '@kubernetes/client-node';
 import { PassThrough } from 'stream';
 import type { DbApplication } from '../db/schema.js';
-import type { AppStatusInfo, K8sPodInfo, NodeInfo } from '@appk3s/shared';
+import type { AppStatusInfo, K8sPodInfo, NodeInfo, ServicePortInfo } from '@appk3s/shared';
 
 const MANAGED_BY = 'appk3s';
 
@@ -175,6 +175,7 @@ export class KubernetesService {
       ports.push({ name: 'http', port: 80, targetPort: 80 as any, protocol: 'TCP' });
     }
 
+    // Use NodePort so the app is always reachable via IP:NodePort even without Ingress
     const body: k8s.V1Service = {
       apiVersion: 'v1',
       kind: 'Service',
@@ -182,7 +183,7 @@ export class KubernetesService {
       spec: {
         selector: { 'app.kubernetes.io/name': name },
         ports,
-        type: 'ClusterIP',
+        type: 'NodePort',
       },
     };
 
@@ -191,6 +192,21 @@ export class KubernetesService {
       () => this.coreApi.createNamespacedService(app.namespace, body),
       () => this.coreApi.replaceNamespacedService(name, app.namespace, body),
     );
+  }
+
+  async getServicePorts(app: DbApplication): Promise<ServicePortInfo[]> {
+    try {
+      const { body } = await this.coreApi.readNamespacedService(app.name, app.namespace);
+      return (body.spec?.ports ?? []).map((p) => ({
+        name: p.name ?? '',
+        port: p.port,
+        targetPort: typeof p.targetPort === 'number' ? p.targetPort : p.port,
+        nodePort: p.nodePort,
+        protocol: p.protocol ?? 'TCP',
+      }));
+    } catch {
+      return [];
+    }
   }
 
   // ─── Ingress ─────────────────────────────────────────────────────────────────
@@ -318,13 +334,28 @@ export class KubernetesService {
       app.namespace,
     );
 
-    const pods = await this.listPods(app);
+    const [pods, servicePorts] = await Promise.all([
+      this.listPods(app),
+      this.getServicePorts(app),
+    ]);
+
+    // Build access URL: prefer Ingress hostname, fallback to NodePort
+    let accessUrl: string | undefined;
+    if (app.subdomain && app.domain) {
+      const proto = app.tlsEnabled ? 'https' : 'http';
+      accessUrl = `${proto}://${app.subdomain}.${app.domain}`;
+    } else if (servicePorts.length > 0 && servicePorts[0].nodePort) {
+      const nodeIp = process.env.NODE_IP ?? '192.168.188.10';
+      accessUrl = `http://${nodeIp}:${servicePorts[0].nodePort}`;
+    }
 
     return {
       desiredReplicas: dep.spec?.replicas ?? 0,
       availableReplicas: dep.status?.availableReplicas ?? 0,
       readyReplicas: dep.status?.readyReplicas ?? 0,
       pods,
+      servicePorts,
+      accessUrl,
     };
   }
 
@@ -347,8 +378,9 @@ export class KubernetesService {
       const age = startTime
         ? `${Math.round((Date.now() - new Date(startTime).getTime()) / 60000)}m`
         : 'N/A';
+      const node = pod.spec?.nodeName ?? '';
 
-      return { name: pod.metadata?.name ?? '', phase, ready, restarts, age };
+      return { name: pod.metadata?.name ?? '', phase, ready, restarts, age, node };
     });
   }
 
