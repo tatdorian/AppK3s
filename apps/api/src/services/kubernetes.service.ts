@@ -1,14 +1,15 @@
 import * as k8s from '@kubernetes/client-node';
+import { PassThrough } from 'stream';
 import type { DbApplication } from '../db/schema.js';
-import type { AppStatusInfo, K8sPodInfo } from '@appk3s/shared';
+import type { AppStatusInfo, K8sPodInfo, NodeInfo } from '@appk3s/shared';
 
 const MANAGED_BY = 'appk3s';
 
 export class KubernetesService {
-  private kc: k8s.KubeConfig;
-  private coreApi: k8s.CoreV1Api;
-  private appsApi: k8s.AppsV1Api;
-  private networkingApi: k8s.NetworkingV1Api;
+  protected kc: k8s.KubeConfig;
+  protected coreApi: k8s.CoreV1Api;
+  protected appsApi: k8s.AppsV1Api;
+  protected networkingApi: k8s.NetworkingV1Api;
 
   constructor() {
     this.kc = new k8s.KubeConfig();
@@ -26,12 +27,10 @@ export class KubernetesService {
 
   async ensureNamespace(namespace: string): Promise<void> {
     try {
-      await this.coreApi.readNamespace({ name: namespace });
+      await this.coreApi.readNamespace(namespace);
     } catch {
       await this.coreApi.createNamespace({
-        body: {
-          metadata: { name: namespace, labels: { 'managed-by': MANAGED_BY } },
-        },
+        metadata: { name: namespace, labels: { 'managed-by': MANAGED_BY } },
       });
     }
   }
@@ -63,9 +62,9 @@ export class KubernetesService {
     };
 
     await this.upsert(
-      () => this.coreApi.readNamespacedSecret({ name, namespace: app.namespace }),
-      () => this.coreApi.createNamespacedSecret({ namespace: app.namespace, body }),
-      () => this.coreApi.replaceNamespacedSecret({ name, namespace: app.namespace, body }),
+      () => this.coreApi.readNamespacedSecret(name, app.namespace),
+      () => this.coreApi.createNamespacedSecret(app.namespace, body),
+      () => this.coreApi.replaceNamespacedSecret(name, app.namespace, body),
     );
   }
 
@@ -85,8 +84,8 @@ export class KubernetesService {
     };
 
     await this.upsert(
-      () => this.coreApi.readNamespacedPersistentVolumeClaim({ name, namespace: app.namespace }),
-      () => this.coreApi.createNamespacedPersistentVolumeClaim({ namespace: app.namespace, body }),
+      () => this.coreApi.readNamespacedPersistentVolumeClaim(name, app.namespace),
+      () => this.coreApi.createNamespacedPersistentVolumeClaim(app.namespace, body),
       () => Promise.resolve(null as any), // PVCs are immutable once bound
     );
   }
@@ -153,9 +152,9 @@ export class KubernetesService {
     };
 
     await this.upsert(
-      () => this.appsApi.readNamespacedDeployment({ name, namespace: app.namespace }),
-      () => this.appsApi.createNamespacedDeployment({ namespace: app.namespace, body }),
-      () => this.appsApi.replaceNamespacedDeployment({ name, namespace: app.namespace, body }),
+      () => this.appsApi.readNamespacedDeployment(name, app.namespace),
+      () => this.appsApi.createNamespacedDeployment(app.namespace, body),
+      () => this.appsApi.replaceNamespacedDeployment(name, app.namespace, body),
     );
   }
 
@@ -188,9 +187,9 @@ export class KubernetesService {
     };
 
     await this.upsert(
-      () => this.coreApi.readNamespacedService({ name, namespace: app.namespace }),
-      () => this.coreApi.createNamespacedService({ namespace: app.namespace, body }),
-      () => this.coreApi.replaceNamespacedService({ name, namespace: app.namespace, body }),
+      () => this.coreApi.readNamespacedService(name, app.namespace),
+      () => this.coreApi.createNamespacedService(app.namespace, body),
+      () => this.coreApi.replaceNamespacedService(name, app.namespace, body),
     );
   }
 
@@ -249,20 +248,26 @@ export class KubernetesService {
     };
 
     await this.upsert(
-      () => this.networkingApi.readNamespacedIngress({ name, namespace: app.namespace }),
-      () => this.networkingApi.createNamespacedIngress({ namespace: app.namespace, body }),
-      () => this.networkingApi.replaceNamespacedIngress({ name, namespace: app.namespace, body }),
+      () => this.networkingApi.readNamespacedIngress(name, app.namespace),
+      () => this.networkingApi.createNamespacedIngress(app.namespace, body),
+      () => this.networkingApi.replaceNamespacedIngress(name, app.namespace, body),
     );
   }
 
   // ─── Scale / Restart ─────────────────────────────────────────────────────────
 
   async scaleDeployment(app: DbApplication, replicas: number): Promise<void> {
-    await this.appsApi.patchNamespacedDeployment({
-      name: app.name,
-      namespace: app.namespace,
-      body: [{ op: 'replace', path: '/spec/replicas', value: replicas }],
-    });
+    await this.appsApi.patchNamespacedDeployment(
+      app.name,
+      app.namespace,
+      [{ op: 'replace', path: '/spec/replicas', value: replicas }],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { headers: { 'Content-Type': 'application/json-patch+json' } },
+    );
   }
 
   async restartDeployment(app: DbApplication): Promise<void> {
@@ -273,11 +278,17 @@ export class KubernetesService {
         value: { 'kubectl.kubernetes.io/restartedAt': new Date().toISOString() },
       },
     ];
-    await this.appsApi.patchNamespacedDeployment({
-      name: app.name,
-      namespace: app.namespace,
-      body: patch,
-    });
+    await this.appsApi.patchNamespacedDeployment(
+      app.name,
+      app.namespace,
+      patch,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { headers: { 'Content-Type': 'application/json-patch+json' } },
+    );
   }
 
   // ─── Delete ──────────────────────────────────────────────────────────────────
@@ -287,13 +298,13 @@ export class KubernetesService {
     const ignore404 = (err: any) => { if (err?.statusCode !== 404) throw err; };
 
     await Promise.allSettled([
-      this.appsApi.deleteNamespacedDeployment({ name: app.name, namespace: ns }).catch(ignore404),
-      this.coreApi.deleteNamespacedService({ name: app.name, namespace: ns }).catch(ignore404),
-      this.networkingApi.deleteNamespacedIngress({ name: `${app.name}-ingress`, namespace: ns }).catch(ignore404),
-      this.coreApi.deleteNamespacedSecret({ name: `${app.name}-env`, namespace: ns }).catch(ignore404),
+      this.appsApi.deleteNamespacedDeployment(app.name, ns).catch(ignore404),
+      this.coreApi.deleteNamespacedService(app.name, ns).catch(ignore404),
+      this.networkingApi.deleteNamespacedIngress(`${app.name}-ingress`, ns).catch(ignore404),
+      this.coreApi.deleteNamespacedSecret(`${app.name}-env`, ns).catch(ignore404),
       ...app.volumes.map((v) =>
         this.coreApi
-          .deleteNamespacedPersistentVolumeClaim({ name: `${app.name}-${v.name}`, namespace: ns })
+          .deleteNamespacedPersistentVolumeClaim(`${app.name}-${v.name}`, ns)
           .catch(ignore404),
       ),
     ]);
@@ -302,10 +313,10 @@ export class KubernetesService {
   // ─── Status & Logs ───────────────────────────────────────────────────────────
 
   async getDeploymentStatus(app: DbApplication): Promise<AppStatusInfo> {
-    const { body: dep } = await this.appsApi.readNamespacedDeployment({
-      name: app.name,
-      namespace: app.namespace,
-    });
+    const { body: dep } = await this.appsApi.readNamespacedDeployment(
+      app.name,
+      app.namespace,
+    );
 
     const pods = await this.listPods(app);
 
@@ -318,10 +329,14 @@ export class KubernetesService {
   }
 
   async listPods(app: DbApplication): Promise<K8sPodInfo[]> {
-    const { body } = await this.coreApi.listNamespacedPod({
-      namespace: app.namespace,
-      labelSelector: `app.kubernetes.io/name=${app.name}`,
-    });
+    const { body } = await this.coreApi.listNamespacedPod(
+      app.namespace,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      `app.kubernetes.io/name=${app.name}`,
+    );
 
     return body.items.map((pod) => {
       const containerStatus = pod.status?.containerStatuses?.[0];
@@ -338,12 +353,19 @@ export class KubernetesService {
   }
 
   async getPodLogs(namespace: string, podName: string, tailLines = 200): Promise<string> {
-    const { body } = await this.coreApi.readNamespacedPodLog({
-      name: podName,
+    const { body } = await this.coreApi.readNamespacedPodLog(
+      podName,
       namespace,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
       tailLines,
-      timestamps: true,
-    });
+      true, // timestamps
+    );
     return body as unknown as string;
   }
 
@@ -353,12 +375,7 @@ export class KubernetesService {
     onLine: (line: string) => void,
   ): Promise<() => void> {
     const log = new k8s.Log(this.kc);
-    const stream = await log.log(namespace, podName, '', null, {
-      follow: true,
-      tailLines: 100,
-      pretty: false,
-      timestamps: true,
-    });
+    const stream = new PassThrough();
 
     stream.on('data', (chunk: Buffer) => {
       chunk
@@ -368,12 +385,92 @@ export class KubernetesService {
         .forEach(onLine);
     });
 
+    await log.log(namespace, podName, '', stream, {
+      follow: true,
+      tailLines: 100,
+      pretty: false,
+      timestamps: true,
+    });
+
     return () => stream.destroy();
+  }
+
+  // ─── Nodes ───────────────────────────────────────────────────────────────────
+
+  async listNodes(): Promise<NodeInfo[]> {
+    const { body: nodeList } = await this.coreApi.listNode();
+
+    // Try to get metrics (metrics-server may not be present)
+    let metricsMap: Record<string, { cpu: string; memory: string }> = {};
+    try {
+      const customApi = this.kc.makeApiClient(k8s.CustomObjectsApi);
+      const metricsResp = await customApi.listClusterCustomObject(
+        'metrics.k8s.io',
+        'v1beta1',
+        'nodes',
+      ) as any;
+      const items: any[] = metricsResp?.body?.items ?? metricsResp?.items ?? [];
+      for (const item of items) {
+        metricsMap[item.metadata.name] = {
+          cpu: item.usage?.cpu ?? '0',
+          memory: item.usage?.memory ?? '0',
+        };
+      }
+    } catch {
+      // metrics-server not installed — skip
+    }
+
+    return nodeList.items.map((node): NodeInfo => {
+      const name = node.metadata?.name ?? '';
+      const roles: string[] = [];
+      const labels = node.metadata?.labels ?? {};
+      if (labels['node-role.kubernetes.io/control-plane'] !== undefined) roles.push('control-plane');
+      if (labels['node-role.kubernetes.io/master'] !== undefined) roles.push('master');
+      if (labels['node-role.kubernetes.io/worker'] !== undefined) roles.push('worker');
+      if (roles.length === 0) roles.push('worker'); // k3s worker nodes often have no role label
+
+      const conditions = node.status?.conditions ?? [];
+      const readyCond = conditions.find((c) => c.type === 'Ready');
+      const ready = readyCond?.status === 'True';
+
+      const allocatable = node.status?.allocatable ?? {};
+      const capacity = node.status?.capacity ?? {};
+
+      const internalIP =
+        node.status?.addresses?.find((a) => a.type === 'InternalIP')?.address ?? '';
+
+      const age = node.metadata?.creationTimestamp
+        ? Math.round(
+            (Date.now() - new Date(node.metadata.creationTimestamp as any).getTime()) / 86400000,
+          ) + 'd'
+        : 'N/A';
+
+      const metrics = metricsMap[name];
+
+      return {
+        name,
+        roles,
+        ready,
+        internalIP,
+        osImage: node.status?.nodeInfo?.osImage ?? '',
+        kernelVersion: node.status?.nodeInfo?.kernelVersion ?? '',
+        containerRuntime: node.status?.nodeInfo?.containerRuntimeVersion ?? '',
+        k8sVersion: node.status?.nodeInfo?.kubeletVersion ?? '',
+        age,
+        // Capacité (allocatable)
+        cpuAllocatable: allocatable['cpu'] ?? capacity['cpu'] ?? '',
+        memoryAllocatable: allocatable['memory'] ?? capacity['memory'] ?? '',
+        podsAllocatable: allocatable['pods'] ?? capacity['pods'] ?? '',
+        // Métriques live (si metrics-server disponible)
+        cpuUsage: metrics?.cpu ?? null,
+        memoryUsage: metrics?.memory ?? null,
+      };
+    });
   }
 
   // ─── Apply helper ────────────────────────────────────────────────────────────
 
-  private async upsert<T>(
+  protected async upsert<T>(
     read: () => Promise<T>,
     create: () => Promise<T>,
     update: () => Promise<T>,

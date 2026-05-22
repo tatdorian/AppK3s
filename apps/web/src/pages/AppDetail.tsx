@@ -36,17 +36,31 @@ export function AppDetail() {
   const deleteMut = useDeleteApp();
   const [confirmDel, setConfirmDel] = useState(false);
 
-  const actionMut = (fn: () => Promise<unknown>, label: string) =>
-    useMutation({
-      mutationFn: fn,
-      onSuccess: () => { qc.invalidateQueries({ queryKey: ['apps', id] }); toast.success(label); },
-      onError: () => toast.error(`${label} failed`),
-    });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['apps', id] });
 
-  const deployMut = actionMut(() => appsApi.deploy(id!), 'Deployment started');
-  const startMut = actionMut(() => appsApi.start(id!), 'Started');
-  const stopMut = actionMut(() => appsApi.stop(id!), 'Stopped');
-  const restartMut = actionMut(() => appsApi.restart(id!), 'Restarted');
+  const deployMut = useMutation({
+    mutationFn: () => appsApi.deploy(id!),
+    onSuccess: () => { invalidate(); toast.success('Deployment started'); },
+    onError: () => toast.error('Deployment failed to start'),
+  });
+
+  const startMut = useMutation({
+    mutationFn: () => appsApi.start(id!),
+    onSuccess: () => { invalidate(); toast.success('Started'); },
+    onError: () => toast.error('Start failed'),
+  });
+
+  const stopMut = useMutation({
+    mutationFn: () => appsApi.stop(id!),
+    onSuccess: () => { invalidate(); toast.success('Stopped'); },
+    onError: () => toast.error('Stop failed'),
+  });
+
+  const restartMut = useMutation({
+    mutationFn: () => appsApi.restart(id!),
+    onSuccess: () => { invalidate(); toast.success('Restarted'); },
+    onError: () => toast.error('Restart failed'),
+  });
 
   if (isLoading || !app) {
     return (
@@ -109,24 +123,33 @@ export function AppDetail() {
             Deploy
           </button>
           {app.status === 'stopped' || app.status === 'idle' ? (
-            <button className="btn-ghost py-2" onClick={() => startMut.mutate()}>
+            <button
+              className="btn-ghost py-2"
+              onClick={() => startMut.mutate()}
+              disabled={startMut.isPending}
+            >
               <Play className="w-4 h-4 text-emerald-400" /> Start
             </button>
           ) : (
             <button
               className="btn-ghost py-2"
               onClick={() => stopMut.mutate()}
-              disabled={app.status !== 'running'}
+              disabled={app.status !== 'running' || stopMut.isPending}
             >
               <Square className="w-4 h-4 text-yellow-400" /> Stop
             </button>
           )}
-          <button className="btn-ghost py-2" onClick={() => restartMut.mutate()} disabled={app.status !== 'running'}>
+          <button
+            className="btn-ghost py-2"
+            onClick={() => restartMut.mutate()}
+            disabled={app.status !== 'running' || restartMut.isPending}
+          >
             <RotateCcw className="w-4 h-4" /> Restart
           </button>
           <button
             className={confirmDel ? 'btn-danger' : 'btn-ghost py-2'}
             onClick={handleDelete}
+            disabled={deleteMut.isPending}
           >
             <Trash2 className="w-4 h-4" />
             {confirmDel ? 'Confirm?' : ''}
@@ -226,6 +249,13 @@ export function AppDetail() {
                 <h3 className="text-sm font-semibold text-white">docker-compose.yml</h3>
               </div>
               <pre className="p-4 text-xs font-mono text-slate-300 overflow-x-auto">{app.composeContent}</pre>
+            </div>
+          )}
+
+          {/* No pods message */}
+          {(!status?.pods || status.pods.length === 0) && app.type !== 'compose' && (
+            <div className="card p-6 text-center text-slate-500 text-sm">
+              No pods running — deploy the application to start it.
             </div>
           )}
         </div>

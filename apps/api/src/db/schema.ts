@@ -80,6 +80,13 @@ export const deployments = pgTable('deployments', {
   completedAt: timestamp('completed_at'),
 });
 
+export const settings = pgTable('settings', {
+  key: varchar('key', { length: 100 }).primaryKey(),
+  value: text('value').notNull().default(''),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 export type DbUser = typeof users.$inferSelect;
 export type DbApplication = typeof applications.$inferSelect;
 export type DbDeployment = typeof deployments.$inferSelect;
+export type DbSetting = typeof settings.$inferSelect;

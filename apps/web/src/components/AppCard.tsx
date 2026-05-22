@@ -15,20 +15,35 @@ interface Props {
 export function AppCard({ app, onDelete }: Props) {
   const qc = useQueryClient();
 
-  const action = (fn: () => Promise<unknown>, label: string) =>
-    useMutation({
-      mutationFn: fn,
-      onSuccess: () => {
-        qc.invalidateQueries({ queryKey: ['apps'] });
-        toast.success(label);
-      },
-      onError: () => toast.error(`${label} failed`),
-    });
+  const onSuccess = (label: string) => () => {
+    qc.invalidateQueries({ queryKey: ['apps'] });
+    toast.success(label);
+  };
+  const onError = (label: string) => () => toast.error(`${label} failed`);
 
-  const startMut = action(() => appsApi.start(app.id), 'Started');
-  const stopMut = action(() => appsApi.stop(app.id), 'Stopped');
-  const restartMut = action(() => appsApi.restart(app.id), 'Restarted');
-  const deployMut = action(() => appsApi.deploy(app.id), 'Deployment started');
+  const startMut = useMutation({
+    mutationFn: () => appsApi.start(app.id),
+    onSuccess: onSuccess('Started'),
+    onError: onError('Start'),
+  });
+
+  const stopMut = useMutation({
+    mutationFn: () => appsApi.stop(app.id),
+    onSuccess: onSuccess('Stopped'),
+    onError: onError('Stop'),
+  });
+
+  const restartMut = useMutation({
+    mutationFn: () => appsApi.restart(app.id),
+    onSuccess: onSuccess('Restarted'),
+    onError: onError('Restart'),
+  });
+
+  const deployMut = useMutation({
+    mutationFn: () => appsApi.deploy(app.id),
+    onSuccess: onSuccess('Deployment started'),
+    onError: onError('Deploy'),
+  });
 
   const hostname =
     app.subdomain && app.domain ? `${app.subdomain}.${app.domain}` : null;
@@ -78,9 +93,9 @@ export function AppCard({ app, onDelete }: Props) {
         <div className="flex items-center gap-1">
           <button
             className="btn-ghost p-1.5"
-            title="Deploy"
+            title="Re-deploy"
             onClick={() => deployMut.mutate()}
-            disabled={app.status === 'deploying'}
+            disabled={app.status === 'deploying' || deployMut.isPending}
           >
             <RotateCcw className="w-3.5 h-3.5" />
           </button>
@@ -89,6 +104,7 @@ export function AppCard({ app, onDelete }: Props) {
               className="btn-ghost p-1.5"
               title="Start"
               onClick={() => startMut.mutate()}
+              disabled={startMut.isPending}
             >
               <Play className="w-3.5 h-3.5 text-emerald-400" />
             </button>
@@ -97,7 +113,7 @@ export function AppCard({ app, onDelete }: Props) {
               className="btn-ghost p-1.5"
               title="Stop"
               onClick={() => stopMut.mutate()}
-              disabled={app.status !== 'running'}
+              disabled={app.status !== 'running' || stopMut.isPending}
             >
               <Square className="w-3.5 h-3.5 text-yellow-400" />
             </button>

@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { DbApplication, DbDeployment } from '../db/schema.js';
 import { KubernetesService } from './kubernetes.service.js';
@@ -31,18 +31,10 @@ export class DeploymentService {
   }
 
   private async runDeploy(app: DbApplication, deploymentId: string): Promise<void> {
+    // Append a log line by SQL concat (avoids read-modify-write race condition)
     const appendLog = async (line: string) => {
-      await db
-        .update(schema.deployments)
-        .set({
-          logs: db.$count(schema.deployments) as any, // workaround: use raw append below
-        })
-        .where(eq(schema.deployments.id, deploymentId));
-
-      // Raw SQL concat for log appending
       await db.execute(
-        `UPDATE deployments SET logs = logs || $1 WHERE id = $2`,
-        [`${line}\n`, deploymentId],
+        sql`UPDATE deployments SET logs = logs || ${line + '\n'} WHERE id = ${deploymentId}`,
       );
     };
 
@@ -54,8 +46,10 @@ export class DeploymentService {
         await appendLog(`[${new Date().toISOString()}] Parsing docker-compose and applying resources`);
         await this.compose.deployCompose(app);
       } else {
-        await appendLog(`[${new Date().toISOString()}] Applying Secret (env vars)`);
-        if (app.envVars.length > 0) await this.k8s.applySecret(app);
+        if (app.envVars.length > 0) {
+          await appendLog(`[${new Date().toISOString()}] Applying Secret (env vars)`);
+          await this.k8s.applySecret(app);
+        }
 
         for (const vol of app.volumes) {
           await appendLog(`[${new Date().toISOString()}] Creating PVC: ${vol.name}`);

@@ -6,6 +6,7 @@ import { Dashboard } from './pages/Dashboard.js';
 import { AppsPage } from './pages/AppsPage.js';
 import { AppDetail } from './pages/AppDetail.js';
 import { CreateApp } from './pages/CreateApp.js';
+import { NodesPage } from './pages/NodesPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { useAuthStore } from './store/auth.js';
 import { authApi } from './lib/api.js';
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="apps" element={<AppsPage />} />
           <Route path="apps/new" element={<CreateApp />} />
           <Route path="apps/:id" element={<AppDetail />} />
+          <Route path="nodes" element={<NodesPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

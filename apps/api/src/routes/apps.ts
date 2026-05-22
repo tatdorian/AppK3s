@@ -8,27 +8,27 @@ import { KubernetesService } from '../services/kubernetes.service.js';
 const k8s = new KubernetesService();
 const deployService = new DeploymentService(k8s);
 
-export async function appsRoutes(app: FastifyInstance) {
-  const auth = { preHandler: app.authenticate };
+export async function appsRoutes(fastify: FastifyInstance) {
+  const auth = { preHandler: fastify.authenticate };
 
   // GET /api/apps
-  app.get('/', auth, async () => {
+  fastify.get('/', auth, async () => {
     return db.query.applications.findMany({
       orderBy: [desc(schema.applications.createdAt)],
     });
   });
 
   // GET /api/apps/:id
-  app.get<{ Params: { id: string } }>('/:id', auth, async (request, reply) => {
-    const app = await db.query.applications.findFirst({
+  fastify.get<{ Params: { id: string } }>('/:id', auth, async (request, reply) => {
+    const application = await db.query.applications.findFirst({
       where: eq(schema.applications.id, request.params.id),
     });
-    if (!app) return reply.code(404).send({ error: 'Not Found', message: 'Application not found' });
-    return app;
+    if (!application) return reply.code(404).send({ error: 'Not Found', message: 'Application not found' });
+    return application;
   });
 
   // POST /api/apps
-  app.post('/', auth, async (request, reply) => {
+  fastify.post('/', auth, async (request, reply) => {
     const body = createAppSchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: 'Validation', message: body.error.flatten() });
@@ -51,7 +51,7 @@ export async function appsRoutes(app: FastifyInstance) {
   });
 
   // PATCH /api/apps/:id
-  app.patch<{ Params: { id: string } }>('/:id', auth, async (request, reply) => {
+  fastify.patch<{ Params: { id: string } }>('/:id', auth, async (request, reply) => {
     const existing = await db.query.applications.findFirst({
       where: eq(schema.applications.id, request.params.id),
     });
@@ -72,7 +72,7 @@ export async function appsRoutes(app: FastifyInstance) {
   });
 
   // DELETE /api/apps/:id
-  app.delete<{ Params: { id: string } }>('/:id', auth, async (request, reply) => {
+  fastify.delete<{ Params: { id: string } }>('/:id', auth, async (request, reply) => {
     const existing = await db.query.applications.findFirst({
       where: eq(schema.applications.id, request.params.id),
     });
@@ -84,7 +84,7 @@ export async function appsRoutes(app: FastifyInstance) {
   });
 
   // POST /api/apps/:id/deploy
-  app.post<{ Params: { id: string } }>('/:id/deploy', auth, async (request, reply) => {
+  fastify.post<{ Params: { id: string } }>('/:id/deploy', auth, async (request, reply) => {
     const application = await db.query.applications.findFirst({
       where: eq(schema.applications.id, request.params.id),
     });
@@ -95,7 +95,7 @@ export async function appsRoutes(app: FastifyInstance) {
   });
 
   // POST /api/apps/:id/start
-  app.post<{ Params: { id: string } }>('/:id/start', auth, async (request, reply) => {
+  fastify.post<{ Params: { id: string } }>('/:id/start', auth, async (request, reply) => {
     const application = await db.query.applications.findFirst({
       where: eq(schema.applications.id, request.params.id),
     });
@@ -105,7 +105,7 @@ export async function appsRoutes(app: FastifyInstance) {
   });
 
   // POST /api/apps/:id/stop
-  app.post<{ Params: { id: string } }>('/:id/stop', auth, async (request, reply) => {
+  fastify.post<{ Params: { id: string } }>('/:id/stop', auth, async (request, reply) => {
     const application = await db.query.applications.findFirst({
       where: eq(schema.applications.id, request.params.id),
     });
@@ -115,7 +115,7 @@ export async function appsRoutes(app: FastifyInstance) {
   });
 
   // POST /api/apps/:id/restart
-  app.post<{ Params: { id: string } }>('/:id/restart', auth, async (request, reply) => {
+  fastify.post<{ Params: { id: string } }>('/:id/restart', auth, async (request, reply) => {
     const application = await db.query.applications.findFirst({
       where: eq(schema.applications.id, request.params.id),
     });
@@ -125,7 +125,7 @@ export async function appsRoutes(app: FastifyInstance) {
   });
 
   // GET /api/apps/:id/status
-  app.get<{ Params: { id: string } }>('/:id/status', auth, async (request, reply) => {
+  fastify.get<{ Params: { id: string } }>('/:id/status', auth, async (request, reply) => {
     const application = await db.query.applications.findFirst({
       where: eq(schema.applications.id, request.params.id),
     });
@@ -140,7 +140,7 @@ export async function appsRoutes(app: FastifyInstance) {
   });
 
   // GET /api/apps/:id/deployments
-  app.get<{ Params: { id: string } }>('/:id/deployments', auth, async (request, reply) => {
+  fastify.get<{ Params: { id: string } }>('/:id/deployments', auth, async (request, reply) => {
     const application = await db.query.applications.findFirst({
       where: eq(schema.applications.id, request.params.id),
     });

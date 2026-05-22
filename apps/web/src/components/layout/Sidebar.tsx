@@ -1,12 +1,13 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Boxes, Settings, LogOut, Server } from 'lucide-react';
+import { LayoutDashboard, Boxes, Settings, LogOut, Server, Network } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.js';
 import { cn } from '../../lib/utils.js';
 
 const nav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/apps', icon: Boxes, label: 'Applications' },
-  { to: '/settings', icon: Settings, label: 'Settings' },
+  { to: '/nodes', icon: Network, label: 'Nœuds' },
+  { to: '/settings', icon: Settings, label: 'Paramètres' },
 ];
 
 export function Sidebar() {

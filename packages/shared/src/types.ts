@@ -83,6 +83,31 @@ export interface AppStatusInfo {
   pods: K8sPodInfo[];
 }
 
+export interface NodeInfo {
+  name: string;
+  roles: string[];
+  ready: boolean;
+  internalIP: string;
+  osImage: string;
+  kernelVersion: string;
+  containerRuntime: string;
+  k8sVersion: string;
+  age: string;
+  // Allocatable resources
+  cpuAllocatable: string;
+  memoryAllocatable: string;
+  podsAllocatable: string;
+  // Live metrics (null if metrics-server not available)
+  cpuUsage: string | null;
+  memoryUsage: string | null;
+}
+
+export interface ClusterSettings {
+  defaultDomain: string;
+  defaultIngressClass: string;
+  defaultTls: string;
+}
+
 export interface PaginatedResponse<T> {
   data: T[];
   total: number;

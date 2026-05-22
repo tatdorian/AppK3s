@@ -1,7 +1,15 @@
 -- AppK3s initial schema
-CREATE TYPE "app_type" AS ENUM ('docker-image', 'compose');
-CREATE TYPE "app_status" AS ENUM ('idle', 'deploying', 'running', 'stopped', 'error');
-CREATE TYPE "deployment_status" AS ENUM ('pending', 'running', 'success', 'failed');
+DO $$ BEGIN
+  CREATE TYPE "app_type" AS ENUM ('docker-image', 'compose');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE "app_status" AS ENUM ('idle', 'deploying', 'running', 'stopped', 'error');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE "deployment_status" AS ENUM ('pending', 'running', 'success', 'failed');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS "users" (
   "id"            uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -3,7 +3,7 @@ import type { DbApplication } from '../db/schema.js';
 import type { KubernetesService } from './kubernetes.service.js';
 import * as k8s from '@kubernetes/client-node';
 
-interface ComposeService {
+interface ComposeServiceDef {
   image?: string;
   build?: string | { context: string; dockerfile?: string };
   ports?: Array<string | { target: number; published?: number; protocol?: string }>;
@@ -18,7 +18,7 @@ interface ComposeService {
 
 interface ComposeFile {
   version?: string;
-  services: Record<string, ComposeService>;
+  services: Record<string, ComposeServiceDef>;
   volumes?: Record<string, unknown>;
   networks?: Record<string, unknown>;
 }
@@ -49,11 +49,15 @@ export class ComposeService {
   private async deployComposeService(
     app: DbApplication,
     serviceName: string,
-    svc: ComposeService,
-    compose: ComposeFile,
+    svc: ComposeServiceDef,
+    _compose: ComposeFile,
   ): Promise<void> {
     const name = `${app.name}-${serviceName}`;
     const ns = app.namespace;
+
+    // Access the underlying k8s clients via the protected accessors
+    const coreApi = (this.k8s as any).coreApi as k8s.CoreV1Api;
+    const appsApi = (this.k8s as any).appsApi as k8s.AppsV1Api;
 
     const envData: Record<string, string> = {};
     if (Array.isArray(svc.environment)) {
@@ -72,26 +76,22 @@ export class ComposeService {
 
     const secretName = `${name}-env`;
     if (Object.keys(envData).length > 0) {
-      await this.k8s['coreApi'].createNamespacedSecret({
-        namespace: ns,
-        body: {
-          metadata: { name: secretName, namespace: ns },
-          data: Object.fromEntries(
-            Object.entries(envData).map(([k, v]) => [k, Buffer.from(v).toString('base64')]),
-          ),
-        },
-      }).catch(async () => {
-        await this.k8s['coreApi'].replaceNamespacedSecret({
-          name: secretName,
-          namespace: ns,
-          body: {
-            metadata: { name: secretName, namespace: ns },
-            data: Object.fromEntries(
-              Object.entries(envData).map(([k, v]) => [k, Buffer.from(v).toString('base64')]),
-            ),
-          },
-        });
-      });
+      const secretBody: k8s.V1Secret = {
+        metadata: { name: secretName, namespace: ns },
+        data: Object.fromEntries(
+          Object.entries(envData).map(([k, v]) => [k, Buffer.from(v).toString('base64')]),
+        ),
+      };
+      try {
+        await coreApi.readNamespacedSecret(secretName, ns);
+        await coreApi.replaceNamespacedSecret(secretName, ns, secretBody);
+      } catch (err: any) {
+        if (err?.statusCode === 404 || err?.response?.statusCode === 404) {
+          await coreApi.createNamespacedSecret(ns, secretBody);
+        } else {
+          throw err;
+        }
+      }
     }
 
     const ports = this.parsePorts(svc.ports);
@@ -119,7 +119,11 @@ export class ComposeService {
       metadata: {
         name,
         namespace: ns,
-        labels: { 'app.kubernetes.io/name': name, 'app.kubernetes.io/managed-by': 'appk3s', 'appk3s.io/app-id': app.id },
+        labels: {
+          'app.kubernetes.io/name': name,
+          'app.kubernetes.io/managed-by': 'appk3s',
+          'appk3s.io/app-id': app.id,
+        },
       },
       spec: {
         replicas,
@@ -147,14 +151,19 @@ export class ComposeService {
       },
     };
 
-    const appsApi = this.k8s['appsApi'] as k8s.AppsV1Api;
-    await appsApi.createNamespacedDeployment({ namespace: ns, body: deploymentBody }).catch(async () => {
-      await appsApi.replaceNamespacedDeployment({ name, namespace: ns, body: deploymentBody });
-    });
+    try {
+      await appsApi.readNamespacedDeployment(name, ns);
+      await appsApi.replaceNamespacedDeployment(name, ns, deploymentBody);
+    } catch (err: any) {
+      if (err?.statusCode === 404 || err?.response?.statusCode === 404) {
+        await appsApi.createNamespacedDeployment(ns, deploymentBody);
+      } else {
+        throw err;
+      }
+    }
 
     // Service
     if (ports.length > 0) {
-      const coreApi = this.k8s['coreApi'] as k8s.CoreV1Api;
       const svcBody: k8s.V1Service = {
         metadata: { name, namespace: ns },
         spec: {
@@ -163,13 +172,20 @@ export class ComposeService {
           type: 'ClusterIP',
         },
       };
-      await coreApi.createNamespacedService({ namespace: ns, body: svcBody }).catch(async () => {
-        await coreApi.replaceNamespacedService({ name, namespace: ns, body: svcBody });
-      });
+      try {
+        await coreApi.readNamespacedService(name, ns);
+        await coreApi.replaceNamespacedService(name, ns, svcBody);
+      } catch (err: any) {
+        if (err?.statusCode === 404 || err?.response?.statusCode === 404) {
+          await coreApi.createNamespacedService(ns, svcBody);
+        } else {
+          throw err;
+        }
+      }
     }
   }
 
-  private parsePorts(ports?: ComposeService['ports']): number[] {
+  private parsePorts(ports?: ComposeServiceDef['ports']): number[] {
     if (!ports) return [];
     return ports.map((p) => {
       if (typeof p === 'string') {
@@ -182,23 +198,23 @@ export class ComposeService {
 
   async deleteCompose(app: DbApplication): Promise<void> {
     const compose = this.parse(app.composeContent!);
-    const appsApi = this.k8s['appsApi'] as k8s.AppsV1Api;
-    const coreApi = this.k8s['coreApi'] as k8s.CoreV1Api;
+    const appsApi = (this.k8s as any).appsApi as k8s.AppsV1Api;
+    const coreApi = (this.k8s as any).coreApi as k8s.CoreV1Api;
     const ignore = (err: any) => { if (err?.statusCode !== 404) throw err; };
     const ns = app.namespace;
 
     for (const serviceName of Object.keys(compose.services)) {
       const name = `${app.name}-${serviceName}`;
       await Promise.allSettled([
-        appsApi.deleteNamespacedDeployment({ name, namespace: ns }).catch(ignore),
-        coreApi.deleteNamespacedService({ name, namespace: ns }).catch(ignore),
-        coreApi.deleteNamespacedSecret({ name: `${name}-env`, namespace: ns }).catch(ignore),
+        appsApi.deleteNamespacedDeployment(name, ns).catch(ignore),
+        coreApi.deleteNamespacedService(name, ns).catch(ignore),
+        coreApi.deleteNamespacedSecret(`${name}-env`, ns).catch(ignore),
       ]);
     }
 
     for (const volName of Object.keys(compose.volumes ?? {})) {
       await coreApi
-        .deleteNamespacedPersistentVolumeClaim({ name: `${app.name}-${volName}`, namespace: ns })
+        .deleteNamespacedPersistentVolumeClaim(`${app.name}-${volName}`, ns)
         .catch(ignore);
     }
   }

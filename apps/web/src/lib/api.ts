@@ -4,6 +4,8 @@ import type {
   Deployment,
   User,
   AppStatusInfo,
+  NodeInfo,
+  ClusterSettings,
   CreateAppInput,
   UpdateAppInput,
   LoginInput,
@@ -76,6 +78,34 @@ export const appsApi = {
 
   deployments: (id: string) =>
     http.get<Deployment[]>(`/api/apps/${id}/deployments`).then((r) => r.data),
+};
+
+// ─── Nodes ───────────────────────────────────────────────────────────────────
+
+export const nodesApi = {
+  list: () => http.get<NodeInfo[]>('/api/nodes').then((r) => r.data),
+};
+
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+export const settingsApi = {
+  get: () => http.get<ClusterSettings>('/api/settings').then((r) => r.data),
+  update: (data: Partial<ClusterSettings>) =>
+    http.patch<ClusterSettings>('/api/settings', data).then((r) => r.data),
+};
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+
+export const usersApi = {
+  list: () => http.get<User[]>('/api/users').then((r) => r.data),
+
+  create: (data: { email: string; password: string; role?: 'admin' | 'viewer' }) =>
+    http.post<User>('/api/users', data).then((r) => r.data),
+
+  update: (id: string, data: { role?: string; password?: string; currentPassword?: string }) =>
+    http.patch<User>(`/api/users/${id}`, data).then((r) => r.data),
+
+  delete: (id: string) => http.delete(`/api/users/${id}`),
 };
 
 // ─── WebSocket log stream ─────────────────────────────────────────────────────

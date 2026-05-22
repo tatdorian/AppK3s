@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
-import { eq } from 'drizzle-orm';
+import { eq, count } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { loginSchema, registerSchema } from '@appk3s/shared';
 
@@ -36,8 +36,8 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Validation', message: body.error.message });
     }
 
-    const count = await db.$count(schema.users);
-    if (count > 0) {
+    const [{ userCount }] = await db.select({ userCount: count() }).from(schema.users);
+    if (userCount > 0) {
       // Require auth for subsequent registrations
       try {
         await request.jwtVerify();
@@ -59,7 +59,7 @@ export async function authRoutes(app: FastifyInstance) {
     const passwordHash = await bcrypt.hash(body.data.password, 12);
     const [user] = await db
       .insert(schema.users)
-      .values({ email: body.data.email, passwordHash, role: count === 0 ? 'admin' : 'viewer' })
+      .values({ email: body.data.email, passwordHash, role: userCount === 0 ? 'admin' : 'viewer' })
       .returning({ id: schema.users.id, email: schema.users.email, role: schema.users.role });
 
     const token = app.jwt.sign({ sub: user.id, email: user.email, role: user.role });

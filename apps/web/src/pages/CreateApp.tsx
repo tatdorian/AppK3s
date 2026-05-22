@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, Plus, Minus } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useCreateApp } from '../hooks/useApps.js';
+import { settingsApi } from '../lib/api.js';
 import { EnvVarsEditor } from '../components/EnvVarsEditor.js';
 import type { EnvVar, Port, Volume } from '@appk3s/shared';
 
@@ -11,6 +13,12 @@ type AppType = 'docker-image' | 'compose';
 export function CreateApp() {
   const navigate = useNavigate();
   const createMut = useCreateApp();
+
+  // Load global defaults
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: settingsApi.get,
+  });
 
   const [type, setType] = useState<AppType>('docker-image');
   const [name, setName] = useState('');
@@ -30,6 +38,14 @@ export function CreateApp() {
   const [memoryLimit, setMemoryLimit] = useState('');
   const [autoDeploy, setAutoDeploy] = useState(true);
 
+  // Pre-fill domain settings once loaded (only if user hasn't typed anything yet)
+  useEffect(() => {
+    if (!settings) return;
+    if (!domain && settings.defaultDomain) setDomain(settings.defaultDomain);
+    if (settings.defaultIngressClass) setIngressClass(settings.defaultIngressClass);
+    if (settings.defaultTls === 'true') setTlsEnabled(true);
+  }, [settings]);
+
   const addPort = () => setPorts([...ports, { containerPort: 80, protocol: 'TCP' }]);
   const removePort = (i: number) => setPorts(ports.filter((_, idx) => idx !== i));
 
@@ -44,7 +60,7 @@ export function CreateApp() {
       namespace,
       type,
       image: type === 'docker-image' ? image : undefined,
-      imageTag: type === 'docker-image' ? imageTag : undefined,
+      imageTag,
       composeContent: type === 'compose' ? composeContent : undefined,
       envVars,
       ports,
