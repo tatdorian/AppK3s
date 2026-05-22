@@ -237,9 +237,7 @@ export class KubernetesService {
       kind: 'Ingress',
       metadata: { name, namespace: app.namespace, labels, annotations },
       spec: {
-        ...(app.ingressClass !== 'traefik'
-          ? { ingressClassName: app.ingressClass }
-          : {}),
+          ingressClassName: app.ingressClass || 'traefik',
         ...(tls ? { tls } : {}),
         rules: [
           {

@@ -42,29 +42,57 @@ export class DeploymentService {
       await this.k8s.ensureNamespace(app.namespace);
       await appendLog(`[${new Date().toISOString()}] Ensuring namespace ${app.namespace}`);
 
-      if (app.type === 'compose') {
+      // Auto-assign subdomain from cluster defaultDomain if none set
+      let effectiveApp = app;
+      if (!app.subdomain || !app.domain) {
+        const settingsRows = await db.query.settings.findMany();
+        const settingsMap = Object.fromEntries(settingsRows.map((r) => [r.key, r.value]));
+        const defaultDomain = settingsMap['defaultDomain'] ?? '';
+        const defaultIngressClass = settingsMap['defaultIngressClass'] ?? 'traefik';
+
+        if (defaultDomain) {
+          const [updated] = await db
+            .update(schema.applications)
+            .set({
+              subdomain: app.name,
+              domain: defaultDomain,
+              ingressClass: defaultIngressClass,
+              updatedAt: new Date(),
+            })
+            .where(eq(schema.applications.id, app.id))
+            .returning();
+          effectiveApp = updated;
+          await appendLog(
+            `[${new Date().toISOString()}] Auto-assigned domain: ${app.name}.${defaultDomain}`,
+          );
+        }
+      }
+
+      if (effectiveApp.type === 'compose') {
         await appendLog(`[${new Date().toISOString()}] Parsing docker-compose and applying resources`);
-        await this.compose.deployCompose(app);
+        await this.compose.deployCompose(effectiveApp);
       } else {
-        if (app.envVars.length > 0) {
+        if (effectiveApp.envVars.length > 0) {
           await appendLog(`[${new Date().toISOString()}] Applying Secret (env vars)`);
-          await this.k8s.applySecret(app);
+          await this.k8s.applySecret(effectiveApp);
         }
 
-        for (const vol of app.volumes) {
+        for (const vol of effectiveApp.volumes) {
           await appendLog(`[${new Date().toISOString()}] Creating PVC: ${vol.name}`);
-          await this.k8s.applyPVC(app, vol.name, vol.size, vol.storageClass);
+          await this.k8s.applyPVC(effectiveApp, vol.name, vol.size, vol.storageClass);
         }
 
-        await appendLog(`[${new Date().toISOString()}] Applying Deployment: ${app.name}`);
-        await this.k8s.applyDeployment(app);
+        await appendLog(`[${new Date().toISOString()}] Applying Deployment: ${effectiveApp.name}`);
+        await this.k8s.applyDeployment(effectiveApp);
 
-        await appendLog(`[${new Date().toISOString()}] Applying Service: ${app.name}`);
-        await this.k8s.applyService(app);
+        await appendLog(`[${new Date().toISOString()}] Applying Service: ${effectiveApp.name}`);
+        await this.k8s.applyService(effectiveApp);
 
-        if (app.subdomain && app.domain) {
-          await appendLog(`[${new Date().toISOString()}] Applying Ingress: ${app.subdomain}.${app.domain}`);
-          await this.k8s.applyIngress(app);
+        if (effectiveApp.subdomain && effectiveApp.domain) {
+          await appendLog(
+            `[${new Date().toISOString()}] Applying Ingress: ${effectiveApp.subdomain}.${effectiveApp.domain}`,
+          );
+          await this.k8s.applyIngress(effectiveApp);
         }
       }
 
