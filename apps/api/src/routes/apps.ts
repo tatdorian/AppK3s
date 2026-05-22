@@ -62,6 +62,15 @@ export async function appsRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'Validation', message: body.error.flatten() });
     }
 
+    // If name is being changed, delete old k8s resources first (they are named after the app)
+    if (body.data.name && body.data.name !== existing.name) {
+      try {
+        await k8s.deleteApp(existing);
+      } catch (err) {
+        fastify.log.warn(`Could not remove old k8s resources for ${existing.name}: ${err}`);
+      }
+    }
+
     const [updated] = await db
       .update(schema.applications)
       .set({ ...body.data, updatedAt: new Date() })

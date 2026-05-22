@@ -40,7 +40,8 @@ export const createAppSchema = z.object({
   memoryLimit: z.string().optional(),
 });
 
-export const updateAppSchema = createAppSchema.partial().omit({ name: true, type: true });
+// type is immutable after creation; name is editable (triggers k8s resource rename)
+export const updateAppSchema = createAppSchema.partial().omit({ type: true });
 
 export const loginSchema = z.object({
   email: z.string().email(),

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ChevronLeft,
@@ -12,6 +12,10 @@ import {
   ExternalLink,
   Network,
   Server,
+  Settings,
+  Plus,
+  Minus,
+  AlertTriangle,
 } from 'lucide-react';
 import { useApp, useAppStatus, useDeployments, useUpdateApp, useDeleteApp } from '../hooks/useApps.js';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -20,10 +24,25 @@ import { StatusBadge } from '../components/StatusBadge.js';
 import { LogsViewer } from '../components/LogsViewer.js';
 import { EnvVarsEditor } from '../components/EnvVarsEditor.js';
 import { formatDate, relativeTime } from '../lib/utils.js';
-import type { EnvVar } from '@appk3s/shared';
+import type { EnvVar, Port } from '@appk3s/shared';
 import toast from 'react-hot-toast';
 
-type Tab = 'overview' | 'environment' | 'logs' | 'deployments';
+type Tab = 'overview' | 'config' | 'environment' | 'logs' | 'deployments';
+
+interface ConfigForm {
+  name: string;
+  image: string;
+  imageTag: string;
+  composeContent: string;
+  subdomain: string;
+  domain: string;
+  ingressClass: string;
+  tlsEnabled: boolean;
+  ports: Port[];
+  replicas: number;
+  cpuLimit: string;
+  memoryLimit: string;
+}
 
 export function AppDetail() {
   const { id } = useParams<{ id: string }>();
@@ -31,39 +50,57 @@ export function AppDetail() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>('overview');
   const [envVars, setEnvVars] = useState<EnvVar[] | null>(null);
+  const [configForm, setConfigForm] = useState<ConfigForm | null>(null);
+  const [confirmDel, setConfirmDel] = useState(false);
 
   const { data: app, isLoading } = useApp(id!);
   const { data: status } = useAppStatus(id!);
   const { data: deployments = [] } = useDeployments(id!);
   const updateMut = useUpdateApp(id!);
   const deleteMut = useDeleteApp();
-  const [confirmDel, setConfirmDel] = useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['apps', id] });
 
   const deployMut = useMutation({
     mutationFn: () => appsApi.deploy(id!),
-    onSuccess: () => { invalidate(); toast.success('Deployment started'); },
-    onError: () => toast.error('Deployment failed to start'),
+    onSuccess: () => { invalidate(); toast.success('Déploiement démarré'); },
+    onError: () => toast.error('Échec du déploiement'),
   });
-
   const startMut = useMutation({
     mutationFn: () => appsApi.start(id!),
-    onSuccess: () => { invalidate(); toast.success('Started'); },
-    onError: () => toast.error('Start failed'),
+    onSuccess: () => { invalidate(); toast.success('Démarré'); },
+    onError: () => toast.error('Échec du démarrage'),
   });
-
   const stopMut = useMutation({
     mutationFn: () => appsApi.stop(id!),
-    onSuccess: () => { invalidate(); toast.success('Stopped'); },
-    onError: () => toast.error('Stop failed'),
+    onSuccess: () => { invalidate(); toast.success('Arrêté'); },
+    onError: () => toast.error('Échec de l\'arrêt'),
   });
-
   const restartMut = useMutation({
     mutationFn: () => appsApi.restart(id!),
-    onSuccess: () => { invalidate(); toast.success('Restarted'); },
-    onError: () => toast.error('Restart failed'),
+    onSuccess: () => { invalidate(); toast.success('Redémarré'); },
+    onError: () => toast.error('Échec du redémarrage'),
   });
+
+  // Init config form from app data (first time only)
+  useEffect(() => {
+    if (app && !configForm) {
+      setConfigForm({
+        name: app.name,
+        image: app.image ?? '',
+        imageTag: app.imageTag,
+        composeContent: app.composeContent ?? '',
+        subdomain: app.subdomain ?? '',
+        domain: app.domain ?? '',
+        ingressClass: app.ingressClass,
+        tlsEnabled: app.tlsEnabled,
+        ports: app.ports,
+        replicas: app.replicas,
+        cpuLimit: app.cpuLimit ?? '',
+        memoryLimit: app.memoryLimit ?? '',
+      });
+    }
+  }, [app]);
 
   if (isLoading || !app) {
     return (
@@ -73,15 +110,16 @@ export function AppDetail() {
     );
   }
 
-  const hostname =
-    app.subdomain && app.domain ? `${app.subdomain}.${app.domain}` : null;
+  const hostname = app.subdomain && app.domain ? `${app.subdomain}.${app.domain}` : null;
   const accessUrl = status?.accessUrl;
+  const nameChanged = configForm?.name !== app.name;
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
-    { id: 'environment', label: 'Environment' },
+    { id: 'config', label: 'Configuration' },
+    { id: 'environment', label: 'Env Vars' },
     { id: 'logs', label: 'Logs' },
-    { id: 'deployments', label: 'Deployments' },
+    { id: 'deployments', label: 'Déploiements' },
   ];
 
   const handleDelete = async () => {
@@ -95,6 +133,59 @@ export function AppDetail() {
     await updateMut.mutateAsync({ envVars });
     setEnvVars(null);
   };
+
+  const resetConfig = () => {
+    if (!app) return;
+    setConfigForm({
+      name: app.name,
+      image: app.image ?? '',
+      imageTag: app.imageTag,
+      composeContent: app.composeContent ?? '',
+      subdomain: app.subdomain ?? '',
+      domain: app.domain ?? '',
+      ingressClass: app.ingressClass,
+      tlsEnabled: app.tlsEnabled,
+      ports: app.ports,
+      replicas: app.replicas,
+      cpuLimit: app.cpuLimit ?? '',
+      memoryLimit: app.memoryLimit ?? '',
+    });
+  };
+
+  const saveConfig = async (andDeploy: boolean) => {
+    if (!configForm) return;
+    const payload = {
+      name: configForm.name,
+      image: configForm.image || undefined,
+      imageTag: configForm.imageTag,
+      composeContent: configForm.composeContent || undefined,
+      subdomain: configForm.subdomain || undefined,
+      domain: configForm.domain || undefined,
+      ingressClass: configForm.ingressClass,
+      tlsEnabled: configForm.tlsEnabled,
+      ports: configForm.ports,
+      replicas: configForm.replicas,
+      cpuLimit: configForm.cpuLimit || undefined,
+      memoryLimit: configForm.memoryLimit || undefined,
+    };
+    try {
+      const updated = await updateMut.mutateAsync(payload);
+      if (andDeploy) {
+        await appsApi.deploy(updated.id);
+        toast.success('Config sauvegardée — déploiement en cours');
+      } else {
+        toast.success('Configuration sauvegardée');
+      }
+      qc.invalidateQueries({ queryKey: ['apps', id] });
+      // Resync form with server values
+      setConfigForm(null);
+    } catch {
+      // toast handled by mutation
+    }
+  };
+
+  const setPort = (i: number, val: Partial<Port>) =>
+    setConfigForm((f) => f ? { ...f, ports: f.ports.map((p, idx) => idx === i ? { ...p, ...val } : p) } : f);
 
   return (
     <div className="p-8 max-w-4xl mx-auto">
@@ -127,27 +218,15 @@ export function AppDetail() {
             Deploy
           </button>
           {app.status === 'stopped' || app.status === 'idle' ? (
-            <button
-              className="btn-ghost py-2"
-              onClick={() => startMut.mutate()}
-              disabled={startMut.isPending}
-            >
+            <button className="btn-ghost py-2" onClick={() => startMut.mutate()} disabled={startMut.isPending}>
               <Play className="w-4 h-4 text-emerald-400" /> Start
             </button>
           ) : (
-            <button
-              className="btn-ghost py-2"
-              onClick={() => stopMut.mutate()}
-              disabled={app.status !== 'running' || stopMut.isPending}
-            >
+            <button className="btn-ghost py-2" onClick={() => stopMut.mutate()} disabled={app.status !== 'running' || stopMut.isPending}>
               <Square className="w-4 h-4 text-yellow-400" /> Stop
             </button>
           )}
-          <button
-            className="btn-ghost py-2"
-            onClick={() => restartMut.mutate()}
-            disabled={app.status !== 'running' || restartMut.isPending}
-          >
+          <button className="btn-ghost py-2" onClick={() => restartMut.mutate()} disabled={app.status !== 'running' || restartMut.isPending}>
             <RotateCcw className="w-4 h-4" /> Restart
           </button>
           <button
@@ -156,7 +235,7 @@ export function AppDetail() {
             disabled={deleteMut.isPending}
           >
             <Trash2 className="w-4 h-4" />
-            {confirmDel ? 'Confirm?' : ''}
+            {confirmDel ? 'Confirmer?' : ''}
           </button>
         </div>
       </div>
@@ -188,7 +267,7 @@ export function AppDetail() {
           <p className="text-sm font-medium text-white">{app.namespace}</p>
         </div>
         <div className="card p-3">
-          <p className="text-xs text-slate-500 mb-1">Created</p>
+          <p className="text-xs text-slate-500 mb-1">Créé</p>
           <p className="text-sm font-medium text-white">{relativeTime(app.createdAt)}</p>
         </div>
         <div className="card p-3">
@@ -234,17 +313,6 @@ export function AppDetail() {
                   </div>
                   <span className="text-xs text-slate-600">{sp.protocol}</span>
                 </div>
-                {sp.nodePort && (
-                  <a
-                    href={`http://192.168.188.10:${sp.nodePort}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="ml-1 p-1 rounded hover:bg-surface-200 text-slate-400 hover:text-accent"
-                    title={`Ouvrir sur NodePort ${sp.nodePort}`}
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                )}
               </div>
             ))}
           </div>
@@ -258,22 +326,22 @@ export function AppDetail() {
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`px-4 py-2.5 text-sm font-medium transition-all border-b-2 -mb-px ${
+              className={`px-4 py-2.5 text-sm font-medium transition-all border-b-2 -mb-px flex items-center gap-1.5 ${
                 tab === t.id
                   ? 'border-accent text-accent'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
+              {t.id === 'config' && <Settings className="w-3.5 h-3.5" />}
               {t.label}
             </button>
           ))}
         </nav>
       </div>
 
-      {/* Tab content */}
+      {/* ── Overview ─────────────────────────────────────────────────────────── */}
       {tab === 'overview' && (
         <div className="space-y-4">
-          {/* Pods */}
           {status?.pods && status.pods.length > 0 && (
             <div className="card overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-700/40">
@@ -307,8 +375,6 @@ export function AppDetail() {
               </table>
             </div>
           )}
-
-          {/* Compose content preview */}
           {app.type === 'compose' && app.composeContent && (
             <div className="card overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-700/40">
@@ -317,8 +383,6 @@ export function AppDetail() {
               <pre className="p-4 text-xs font-mono text-slate-300 overflow-x-auto">{app.composeContent}</pre>
             </div>
           )}
-
-          {/* No pods message */}
           {(!status?.pods || status.pods.length === 0) && app.type !== 'compose' && (
             <div className="card p-6 text-center text-slate-500 text-sm">
               Aucun pod en cours — déployez l'application pour la démarrer.
@@ -327,6 +391,233 @@ export function AppDetail() {
         </div>
       )}
 
+      {/* ── Configuration ────────────────────────────────────────────────────── */}
+      {tab === 'config' && configForm && (
+        <div className="space-y-5">
+          {/* Name change warning */}
+          {nameChanged && (
+            <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-300 text-sm">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              Renommer l'application supprimera les ressources k8s existantes. Un redéploiement est requis.
+            </div>
+          )}
+
+          {/* General */}
+          <div className="card p-5 space-y-4">
+            <h2 className="text-sm font-semibold text-white">Général</h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Nom de l'application</label>
+                <input
+                  className="input"
+                  value={configForm.name}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, name: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') } : f)}
+                />
+                <p className="text-xs text-slate-600 mt-1">minuscules, tirets uniquement</p>
+              </div>
+              <div>
+                <label className="label">Replicas</label>
+                <input
+                  type="number"
+                  className="input"
+                  min={0} max={50}
+                  value={configForm.replicas}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, replicas: Number(e.target.value) } : f)}
+                />
+              </div>
+            </div>
+
+            {app.type === 'docker-image' ? (
+              <div className="grid grid-cols-3 gap-4">
+                <div className="col-span-2">
+                  <label className="label">Image Docker</label>
+                  <input
+                    className="input"
+                    placeholder="nginx"
+                    value={configForm.image}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, image: e.target.value } : f)}
+                  />
+                </div>
+                <div>
+                  <label className="label">Tag</label>
+                  <input
+                    className="input"
+                    placeholder="latest"
+                    value={configForm.imageTag}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, imageTag: e.target.value } : f)}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div>
+                <label className="label">docker-compose.yml</label>
+                <textarea
+                  className="input font-mono text-xs h-48 resize-none"
+                  value={configForm.composeContent}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, composeContent: e.target.value } : f)}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Domain */}
+          <div className="card p-5 space-y-4">
+            <h2 className="text-sm font-semibold text-white">Domaine & Ingress</h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Sous-domaine</label>
+                <input
+                  className="input"
+                  placeholder={app.name}
+                  value={configForm.subdomain}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, subdomain: e.target.value } : f)}
+                />
+              </div>
+              <div>
+                <label className="label">Domaine wildcard</label>
+                <input
+                  className="input"
+                  placeholder="example.com"
+                  value={configForm.domain}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, domain: e.target.value } : f)}
+                />
+              </div>
+            </div>
+            {configForm.subdomain && configForm.domain && (
+              <p className="text-xs text-accent">
+                → URL : {configForm.tlsEnabled ? 'https' : 'http'}://{configForm.subdomain}.{configForm.domain}
+              </p>
+            )}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Ingress Class</label>
+                <select
+                  className="input"
+                  value={configForm.ingressClass}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, ingressClass: e.target.value } : f)}
+                >
+                  <option value="traefik">Traefik (k3s default)</option>
+                  <option value="nginx">nginx</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-3 pt-6">
+                <input
+                  type="checkbox"
+                  id="tls-edit"
+                  checked={configForm.tlsEnabled}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, tlsEnabled: e.target.checked } : f)}
+                  className="w-4 h-4 rounded accent-accent"
+                />
+                <label htmlFor="tls-edit" className="text-sm text-slate-300">Activer TLS (HTTPS)</label>
+              </div>
+            </div>
+          </div>
+
+          {/* Ports */}
+          {app.type === 'docker-image' && (
+            <div className="card p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-white">Ports exposés</h2>
+                <button
+                  type="button"
+                  onClick={() => setConfigForm((f) => f ? { ...f, ports: [...f.ports, { containerPort: 80, protocol: 'TCP' }] } : f)}
+                  className="btn-ghost text-xs py-1"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Ajouter
+                </button>
+              </div>
+              {configForm.ports.length === 0 && (
+                <p className="text-xs text-slate-600">Aucun port — le port 80 sera utilisé par défaut.</p>
+              )}
+              {configForm.ports.map((p, i) => (
+                <div key={i} className="flex gap-3 items-center">
+                  <input
+                    type="number"
+                    className="input"
+                    placeholder="Port"
+                    value={p.containerPort}
+                    onChange={(e) => setPort(i, { containerPort: Number(e.target.value) })}
+                  />
+                  <select
+                    className="input w-24 shrink-0"
+                    value={p.protocol}
+                    onChange={(e) => setPort(i, { protocol: e.target.value as 'TCP' | 'UDP' })}
+                  >
+                    <option>TCP</option>
+                    <option>UDP</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setConfigForm((f) => f ? { ...f, ports: f.ports.filter((_, idx) => idx !== i) } : f)}
+                    className="btn-danger p-2 shrink-0"
+                  >
+                    <Minus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Resources */}
+          <div className="card p-5 space-y-4">
+            <h2 className="text-sm font-semibold text-white">Ressources</h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Limite CPU</label>
+                <input
+                  className="input"
+                  placeholder="500m"
+                  value={configForm.cpuLimit}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, cpuLimit: e.target.value } : f)}
+                />
+                <p className="text-xs text-slate-600 mt-1">ex : 500m, 1, 2</p>
+              </div>
+              <div>
+                <label className="label">Limite Mémoire</label>
+                <input
+                  className="input"
+                  placeholder="512Mi"
+                  value={configForm.memoryLimit}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, memoryLimit: e.target.value } : f)}
+                />
+                <p className="text-xs text-slate-600 mt-1">ex : 256Mi, 1Gi</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <button
+              type="button"
+              onClick={resetConfig}
+              className="btn-ghost text-sm"
+            >
+              Annuler les modifications
+            </button>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => saveConfig(false)}
+                disabled={updateMut.isPending}
+                className="btn-ghost py-2"
+              >
+                Sauvegarder
+              </button>
+              <button
+                type="button"
+                onClick={() => saveConfig(true)}
+                disabled={updateMut.isPending || deployMut.isPending}
+                className="btn-primary py-2"
+              >
+                <Rocket className="w-4 h-4" />
+                {updateMut.isPending ? 'Sauvegarde...' : 'Sauvegarder & Redéployer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Env Vars ─────────────────────────────────────────────────────────── */}
       {tab === 'environment' && (
         <div className="card p-5 space-y-4">
           <div className="flex items-center justify-between">
@@ -344,15 +635,22 @@ export function AppDetail() {
             value={envVars ?? app.envVars}
             onChange={(vars) => setEnvVars(vars)}
           />
+          {envVars !== null && (
+            <p className="text-xs text-slate-500">
+              Après sauvegarde, redéployez l'application pour appliquer les nouvelles variables.
+            </p>
+          )}
         </div>
       )}
 
+      {/* ── Logs ─────────────────────────────────────────────────────────────── */}
       {tab === 'logs' && (
         <div className="card overflow-hidden h-[500px]">
           <LogsViewer appId={app.id} />
         </div>
       )}
 
+      {/* ── Deployments ──────────────────────────────────────────────────────── */}
       {tab === 'deployments' && (
         <div className="card overflow-hidden">
           {deployments.length === 0 ? (
