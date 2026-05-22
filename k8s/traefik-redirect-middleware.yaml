@@ -1,0 +1,13 @@
+---
+# Middleware Traefik : redirection HTTP → HTTPS
+# Référencé dans les Ingress via l'annotation :
+#   traefik.ingress.kubernetes.io/router.middlewares: default-redirect-https@kubernetescrd
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: default
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true

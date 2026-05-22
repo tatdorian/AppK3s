@@ -1,0 +1,18 @@
+---
+# Override CoreDNS : résout *.w0.app.syit.fr vers le master node en interne
+# Contourne le hairpin NAT pour que cert-manager puisse valider le challenge ACME
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  syit.server: |
+    w0.app.syit.fr:53 {
+      hosts {
+        192.168.188.10 appk3s.w0.app.syit.fr
+        192.168.188.10 nginx.w0.app.syit.fr
+        fallthrough
+      }
+      forward . /etc/resolv.conf
+    }

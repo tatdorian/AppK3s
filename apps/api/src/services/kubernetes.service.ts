@@ -220,12 +220,22 @@ export class KubernetesService {
     const labels = this.labels(app);
 
     const annotations: Record<string, string> = {};
-    if (app.ingressClass === 'nginx') {
-      annotations['kubernetes.io/ingress.class'] = 'nginx';
+    const ingressClass = app.ingressClass || 'traefik';
+
+    if (ingressClass === 'nginx') {
+      if (app.tlsEnabled) {
+        annotations['nginx.ingress.kubernetes.io/ssl-redirect'] = 'true';
+        annotations['cert-manager.io/cluster-issuer'] = 'letsencrypt-prod';
+      }
     } else {
-      annotations['traefik.ingress.kubernetes.io/router.entrypoints'] = app.tlsEnabled
-        ? 'web,websecure'
-        : 'web';
+      // Traefik (k3s default)
+      if (app.tlsEnabled) {
+        annotations['traefik.ingress.kubernetes.io/router.entrypoints'] = 'web,websecure';
+        annotations['traefik.ingress.kubernetes.io/router.middlewares'] = 'default-redirect-https@kubernetescrd';
+        annotations['cert-manager.io/cluster-issuer'] = 'letsencrypt-prod';
+      } else {
+        annotations['traefik.ingress.kubernetes.io/router.entrypoints'] = 'web';
+      }
     }
 
     const tls: k8s.V1IngressTLS[] | undefined = app.tlsEnabled
@@ -237,7 +247,7 @@ export class KubernetesService {
       kind: 'Ingress',
       metadata: { name, namespace: app.namespace, labels, annotations },
       spec: {
-          ingressClassName: app.ingressClass || 'traefik',
+        ingressClassName: ingressClass,
         ...(tls ? { tls } : {}),
         rules: [
           {

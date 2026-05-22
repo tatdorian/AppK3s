@@ -40,8 +40,16 @@ metadata:
   namespace: default
   labels:
     app: appk3s
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.middlewares: default-redirect-https@kubernetescrd
 spec:
   ingressClassName: traefik
+  tls:
+    - hosts:
+        - appk3s.w0.app.syit.fr
+      secretName: appk3s-tls
   rules:
     - host: appk3s.w0.app.syit.fr
       http:
