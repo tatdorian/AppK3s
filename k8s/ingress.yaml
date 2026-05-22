@@ -1,0 +1,38 @@
+---
+# Ingress for AppK3s itself
+# Replace appk3s.example.com with your actual domain
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: appk3s-ingress
+  namespace: appk3s
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+spec:
+  rules:
+    - host: appk3s.example.com
+      http:
+        paths:
+          # API routes (including WebSocket)
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: appk3s-api
+                port:
+                  number: 3001
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: appk3s-api
+                port:
+                  number: 3001
+          # Frontend (catch-all)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: appk3s-web
+                port:
+                  number: 80

@@ -1,0 +1,66 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: appk3s-api-secret
+  namespace: appk3s
+type: Opaque
+stringData:
+  JWT_SECRET: "change-this-to-a-32-char-random-secret"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: appk3s-api
+  namespace: appk3s
+  labels:
+    app: appk3s-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: appk3s-api
+  template:
+    metadata:
+      labels:
+        app: appk3s-api
+    spec:
+      serviceAccountName: appk3s
+      containers:
+        - name: api
+          image: ghcr.io/your-org/appk3s-api:latest  # replace with your image
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3001
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3001"
+            - name: REDIS_URL
+              value: redis://redis:6379
+          envFrom:
+            - secretRef:
+                name: postgres-secret
+            - secretRef:
+                name: appk3s-api-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: appk3s-api
+  namespace: appk3s
+spec:
+  selector:
+    app: appk3s-api
+  ports:
+    - port: 3001
+      targetPort: 3001
