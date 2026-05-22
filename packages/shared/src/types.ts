@@ -92,6 +92,7 @@ export interface AppStatusInfo {
   pods: K8sPodInfo[];
   servicePorts: ServicePortInfo[];
   accessUrl?: string;
+  nodePortUrls: string[];  // ex: ["http://192.168.188.10:32196", "http://192.168.188.20:32196"]
 }
 
 export interface NodeInfo {

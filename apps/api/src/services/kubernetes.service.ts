@@ -328,25 +328,45 @@ export class KubernetesService {
 
   // ─── Status & Logs ───────────────────────────────────────────────────────────
 
+  async getNodeIPs(): Promise<string[]> {
+    try {
+      const { body } = await this.coreApi.listNode();
+      return body.items
+        .map((n) => n.status?.addresses?.find((a) => a.type === 'InternalIP')?.address ?? '')
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
   async getDeploymentStatus(app: DbApplication): Promise<AppStatusInfo> {
     const { body: dep } = await this.appsApi.readNamespacedDeployment(
       app.name,
       app.namespace,
     );
 
-    const [pods, servicePorts] = await Promise.all([
+    const [pods, servicePorts, nodeIPs] = await Promise.all([
       this.listPods(app),
       this.getServicePorts(app),
+      this.getNodeIPs(),
     ]);
 
-    // Build access URL: prefer Ingress hostname, fallback to NodePort
+    // Build access URLs
     let accessUrl: string | undefined;
+    let nodePortUrls: string[] = [];
+
     if (app.subdomain && app.domain) {
       const proto = app.tlsEnabled ? 'https' : 'http';
       accessUrl = `${proto}://${app.subdomain}.${app.domain}`;
-    } else if (servicePorts.length > 0 && servicePorts[0].nodePort) {
-      const nodeIp = process.env.NODE_IP ?? '192.168.188.10';
-      accessUrl = `http://${nodeIp}:${servicePorts[0].nodePort}`;
+    }
+
+    // NodePort URLs — accessible sur TOUS les nodes du cluster
+    const firstNodePort = servicePorts.find((p) => p.nodePort)?.nodePort;
+    if (firstNodePort) {
+      nodePortUrls = nodeIPs.map((ip) => `http://${ip}:${firstNodePort}`);
+      if (!accessUrl && nodePortUrls.length > 0) {
+        accessUrl = nodePortUrls[0];
+      }
     }
 
     return {
@@ -356,6 +376,7 @@ export class KubernetesService {
       pods,
       servicePorts,
       accessUrl,
+      nodePortUrls,
     };
   }
 
