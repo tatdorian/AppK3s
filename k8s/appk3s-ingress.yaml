@@ -1,4 +1,4 @@
-# AppK3s management UI — routes appk3s.w0.app.syit.fr → Vite dev server on master node
+# AppK3s management UI — routes appk3s.app.syit.fr → Vite dev server on master node
 # Apply with: kubectl apply -f k8s/appk3s-ingress.yaml
 ---
 apiVersion: v1
@@ -48,10 +48,10 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts:
-        - appk3s.w0.app.syit.fr
+        - appk3s.app.syit.fr
       secretName: appk3s-tls
   rules:
-    - host: appk3s.w0.app.syit.fr
+    - host: appk3s.app.syit.fr
       http:
         paths:
           - path: /

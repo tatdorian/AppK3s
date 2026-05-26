@@ -32,7 +32,7 @@ function isAllowedKey(k: string): k is SettingKey {
 const DEFAULTS: Record<SettingKey, string> = {
   defaultDomain:      '',
   defaultIngressClass:'traefik',
-  defaultTls:         'false',
+  defaultTls:         'true',
   wildcardDomain:     '',
   interfaceDomain:    '',
   masterNodeIp:       process.env.NODE_IP ?? '192.168.188.10',

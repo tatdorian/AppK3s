@@ -32,6 +32,7 @@ function DeployDialog({
       const app = await appsApi.create({
         ...template.defaults,
         name,
+        namespace: 'default',
         subdomain,
         domain: wildcardDomain || undefined,
         tlsEnabled,

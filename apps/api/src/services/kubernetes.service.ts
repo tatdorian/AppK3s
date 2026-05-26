@@ -10,6 +10,7 @@ export class KubernetesService {
   protected coreApi: k8s.CoreV1Api;
   protected appsApi: k8s.AppsV1Api;
   protected networkingApi: k8s.NetworkingV1Api;
+  protected customApi: k8s.CustomObjectsApi;
 
   constructor() {
     this.kc = new k8s.KubeConfig();
@@ -21,6 +22,7 @@ export class KubernetesService {
     this.coreApi = this.kc.makeApiClient(k8s.CoreV1Api);
     this.appsApi = this.kc.makeApiClient(k8s.AppsV1Api);
     this.networkingApi = this.kc.makeApiClient(k8s.NetworkingV1Api);
+    this.customApi = this.kc.makeApiClient(k8s.CustomObjectsApi);
   }
 
   // ─── Namespace ───────────────────────────────────────────────────────────────
@@ -175,23 +177,44 @@ export class KubernetesService {
       ports.push({ name: 'http', port: 80, targetPort: 80 as any, protocol: 'TCP' });
     }
 
-    // Use NodePort so the app is always reachable via IP:NodePort even without Ingress
-    const body: k8s.V1Service = {
-      apiVersion: 'v1',
-      kind: 'Service',
-      metadata: { name, namespace: app.namespace, labels },
-      spec: {
-        selector: { 'app.kubernetes.io/name': name },
-        ports,
-        type: 'NodePort',
-      },
-    };
+    try {
+      // Service exists → patch uniquement selector + ports.
+      // replaceNamespacedService est interdit car clusterIP est immutable :
+      // Kubernetes rejette un replace sans clusterIP avec "This field is immutable".
+      await this.coreApi.readNamespacedService(name, app.namespace);
 
-    await this.upsert(
-      () => this.coreApi.readNamespacedService(name, app.namespace),
-      () => this.coreApi.createNamespacedService(app.namespace, body),
-      () => this.coreApi.replaceNamespacedService(name, app.namespace, body),
-    );
+      const patchBody = {
+        metadata: { labels },
+        spec: {
+          selector: { 'app.kubernetes.io/name': name },
+          ports,
+        },
+      };
+      await this.coreApi.patchNamespacedService(
+        name,
+        app.namespace,
+        patchBody,
+        undefined, undefined, undefined, undefined, undefined,
+        { headers: { 'Content-Type': 'application/strategic-merge-patch+json' } },
+      );
+    } catch (err: any) {
+      if (err?.statusCode === 404 || err?.response?.statusCode === 404) {
+        // Service n'existe pas → création complète avec NodePort
+        const body: k8s.V1Service = {
+          apiVersion: 'v1',
+          kind: 'Service',
+          metadata: { name, namespace: app.namespace, labels },
+          spec: {
+            selector: { 'app.kubernetes.io/name': name },
+            ports,
+            type: 'NodePort',
+          },
+        };
+        await this.coreApi.createNamespacedService(app.namespace, body);
+      } else {
+        throw err;
+      }
+    }
   }
 
   async getServicePorts(app: DbApplication): Promise<ServicePortInfo[]> {
@@ -211,12 +234,78 @@ export class KubernetesService {
 
   // ─── Ingress ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Crée explicitement un Certificate cert-manager via Let's Encrypt
+   * et attend qu'il soit Ready avant de créer l'Ingress.
+   * Évite la race condition où Traefik cherche le secret TLS avant
+   * que cert-manager ait terminé la validation HTTP-01.
+   * Timeout : 3 minutes (Let's Encrypt HTTP-01 prend 30-90s en général).
+   */
+  private async ensureCertificate(
+    host: string,
+    secretName: string,
+    namespace: string,
+  ): Promise<void> {
+    const certName = secretName; // même nom que le secret TLS
+
+    const certBody = {
+      apiVersion: 'cert-manager.io/v1',
+      kind: 'Certificate',
+      metadata: {
+        name: certName,
+        namespace,
+      },
+      spec: {
+        secretName,
+        dnsNames: [host],
+        issuerRef: {
+          name: 'letsencrypt-prod',
+          kind: 'ClusterIssuer',
+        },
+      },
+    };
+
+    // Upsert du Certificate
+    try {
+      await this.customApi.getNamespacedCustomObject(
+        'cert-manager.io', 'v1', namespace, 'certificates', certName,
+      );
+      await this.customApi.replaceNamespacedCustomObject(
+        'cert-manager.io', 'v1', namespace, 'certificates', certName, certBody,
+      );
+    } catch (err: any) {
+      if (err?.statusCode === 404 || err?.response?.statusCode === 404) {
+        await this.customApi.createNamespacedCustomObject(
+          'cert-manager.io', 'v1', namespace, 'certificates', certBody,
+        );
+      } else {
+        throw err;
+      }
+    }
+
+    // Attendre que le cert soit Ready (max 3 min — HTTP-01 prend 30-90s)
+    for (let i = 0; i < 180; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        const res: any = await this.customApi.getNamespacedCustomObject(
+          'cert-manager.io', 'v1', namespace, 'certificates', certName,
+        );
+        const conditions: any[] = res?.body?.status?.conditions ?? [];
+        const ready = conditions.find((c: any) => c.type === 'Ready' && c.status === 'True');
+        if (ready) return;
+      } catch {
+        // ignore, on réessaie
+      }
+    }
+    // On continue même si le timeout est atteint (cert sera prêt en arrière-plan)
+  }
+
   async applyIngress(
     app: DbApplication,
     /**
      * Quand fourni, on réutilise ce secret TLS existant (ex: cert wildcard).
-     * Quand absent, cert-manager provisionne automatiquement un cert Let's Encrypt
-     * par app (annotation cluster-issuer + secret <appname>-tls).
+     * Quand absent, un Certificate cert-manager est créé via la CA interne
+     * AppK3s (10 ans, sans HTTP-01) et attendu avant la création de l'Ingress.
      */
     wildcardCertSecret?: string,
   ): Promise<void> {
@@ -230,26 +319,23 @@ export class KubernetesService {
     const annotations: Record<string, string> = {};
     const ingressClass = app.ingressClass || 'traefik';
 
-    // Détermine le secret TLS et si cert-manager doit provisionner le cert
     const useWildcard = !!wildcardCertSecret;
     const certSecretName = wildcardCertSecret ?? `${app.name}-tls`;
+
+    if (app.tlsEnabled && !useWildcard) {
+      // ① Créer le Certificate AVANT l'Ingress → Traefik trouve le secret dès le départ
+      await this.ensureCertificate(host, certSecretName, app.namespace);
+    }
 
     if (ingressClass === 'nginx') {
       if (app.tlsEnabled) {
         annotations['nginx.ingress.kubernetes.io/ssl-redirect'] = 'true';
-        if (!useWildcard) {
-          annotations['cert-manager.io/cluster-issuer'] = 'letsencrypt-prod';
-        }
       }
     } else {
       // Traefik (k3s default)
       if (app.tlsEnabled) {
         annotations['traefik.ingress.kubernetes.io/router.entrypoints'] = 'web,websecure';
         annotations['traefik.ingress.kubernetes.io/router.middlewares'] = 'default-redirect-https@kubernetescrd';
-        if (!useWildcard) {
-          // cert-manager provisionne automatiquement le cert via HTTP-01
-          annotations['cert-manager.io/cluster-issuer'] = 'letsencrypt-prod';
-        }
       } else {
         annotations['traefik.ingress.kubernetes.io/router.entrypoints'] = 'web';
       }
@@ -293,6 +379,18 @@ export class KubernetesService {
       () => this.networkingApi.createNamespacedIngress(app.namespace, body),
       () => this.networkingApi.replaceNamespacedIngress(name, app.namespace, body),
     );
+  }
+
+  // ─── Delete Certificate cert-manager ────────────────────────────────────────
+
+  async deleteCertificate(name: string, namespace: string): Promise<void> {
+    try {
+      await this.customApi.deleteNamespacedCustomObject(
+        'cert-manager.io', 'v1', namespace, 'certificates', name,
+      );
+    } catch {
+      // ignore si inexistant
+    }
   }
 
   // ─── Scale / Restart ─────────────────────────────────────────────────────────
@@ -343,6 +441,9 @@ export class KubernetesService {
       this.coreApi.deleteNamespacedService(app.name, ns).catch(ignore404),
       this.networkingApi.deleteNamespacedIngress(`${app.name}-ingress`, ns).catch(ignore404),
       this.coreApi.deleteNamespacedSecret(`${app.name}-env`, ns).catch(ignore404),
+      // Supprimer le Certificate cert-manager + le secret TLS associé
+      this.deleteCertificate(`${app.name}-tls`, ns),
+      this.coreApi.deleteNamespacedSecret(`${app.name}-tls`, ns).catch(ignore404),
       ...app.volumes.map((v) =>
         this.coreApi
           .deleteNamespacedPersistentVolumeClaim(`${app.name}-${v.name}`, ns)

@@ -6,7 +6,7 @@ export interface AppTemplate {
   description: string;
   category: 'web' | 'database' | 'storage' | 'monitoring' | 'devops' | 'productivity';
   icon: string; // emoji
-  defaults: Omit<CreateAppInput, 'name' | 'subdomain' | 'domain' | 'tlsEnabled'>;
+  defaults: Omit<CreateAppInput, 'name' | 'subdomain' | 'domain' | 'tlsEnabled' | 'namespace'>;
   docs?: string;
   requiredEnv?: string[]; // env vars the user must fill
 }

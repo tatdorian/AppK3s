@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useCreateApp } from '../hooks/useApps.js';
 import { settingsApi } from '../lib/api.js';
 import { EnvVarsEditor } from '../components/EnvVarsEditor.js';
+import { TEMPLATES } from '@appk3s/shared';
 import type { EnvVar, Port, Volume } from '@appk3s/shared';
 
 type AppType = 'docker-image' | 'compose';
@@ -48,6 +49,18 @@ export function CreateApp() {
 
   const addPort = () => setPorts([...ports, { containerPort: 80, protocol: 'TCP' }]);
   const removePort = (i: number) => setPorts(ports.filter((_, idx) => idx !== i));
+
+  // Auto-détection du port depuis le nom de l'image (matcher contre les templates)
+  const handleImageBlur = () => {
+    if (ports.length > 0) return; // ne pas écraser ce que l'user a déjà saisi
+    const imageBase = image.split(':')[0]; // ignorer le tag
+    const match = TEMPLATES.find(
+      (t) => t.defaults.image === imageBase || t.defaults.image === image,
+    );
+    if (match && match.defaults.ports.length > 0) {
+      setPorts([...match.defaults.ports]);
+    }
+  };
 
   const addVolume = () =>
     setVolumes([...volumes, { name: `vol-${volumes.length}`, mountPath: '/data', size: '1Gi' }]);
@@ -151,6 +164,7 @@ export function CreateApp() {
                   placeholder="nginx"
                   value={image}
                   onChange={(e) => setImage(e.target.value)}
+                  onBlur={handleImageBlur}
                   required
                 />
               </div>

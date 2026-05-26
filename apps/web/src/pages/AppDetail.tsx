@@ -28,6 +28,7 @@ import { EnvVarsEditor } from '../components/EnvVarsEditor.js';
 import { formatDate, relativeTime } from '../lib/utils.js';
 import { useAuthStore } from '../store/auth.js';
 import type { EnvVar, Port, SetPermissionInput } from '@appk3s/shared';
+import { TEMPLATES } from '@appk3s/shared';
 import toast from 'react-hot-toast';
 
 type Tab = 'overview' | 'config' | 'environment' | 'logs' | 'deployments' | 'access';
@@ -470,6 +471,16 @@ export function AppDetail() {
                     placeholder="nginx"
                     value={configForm.image}
                     onChange={(e) => setConfigForm((f) => f ? { ...f, image: e.target.value } : f)}
+                    onBlur={() => {
+                      if (!configForm || configForm.ports.length > 0) return;
+                      const imageBase = configForm.image.split(':')[0];
+                      const match = TEMPLATES.find(
+                        (t) => t.defaults.image === imageBase || t.defaults.image === configForm.image,
+                      );
+                      if (match && match.defaults.ports.length > 0) {
+                        setConfigForm((f) => f ? { ...f, ports: [...match.defaults.ports] } : f);
+                      }
+                    }}
                   />
                 </div>
                 <div>

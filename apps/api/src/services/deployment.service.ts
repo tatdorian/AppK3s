@@ -50,6 +50,7 @@ export class DeploymentService {
       if (!app.subdomain || !app.domain) {
         const defaultDomain = settingsMap['defaultDomain'] ?? '';
         const defaultIngressClass = settingsMap['defaultIngressClass'] ?? 'traefik';
+        const defaultTls = settingsMap['defaultTls'] === 'true';
 
         if (defaultDomain) {
           const [updated] = await db
@@ -58,13 +59,14 @@ export class DeploymentService {
               subdomain: app.name,
               domain: defaultDomain,
               ingressClass: defaultIngressClass,
+              tlsEnabled: defaultTls,
               updatedAt: new Date(),
             })
             .where(eq(schema.applications.id, app.id))
             .returning();
           effectiveApp = updated;
           await appendLog(
-            `[${new Date().toISOString()}] Auto-assigned domain: ${app.name}.${defaultDomain}`,
+            `[${new Date().toISOString()}] Auto-assigned domain: ${app.name}.${defaultDomain} (TLS: ${defaultTls})`,
           );
         }
       }
@@ -93,14 +95,9 @@ export class DeploymentService {
           await appendLog(
             `[${new Date().toISOString()}] Applying Ingress: ${effectiveApp.subdomain}.${effectiveApp.domain}`,
           );
-          // Utilise le cert wildcard si wildcardDomain correspond au domaine de l'app,
-          // sinon cert-manager provisionne automatiquement un cert Let's Encrypt par app.
-          const wildcardDomain = settingsMap['wildcardDomain'] ?? '';
-          const certSecret =
-            wildcardDomain && effectiveApp.domain === wildcardDomain
-              ? 'wildcard-tls'
-              : undefined;
-          await this.k8s.applyIngress(effectiveApp, certSecret);
+          // Toujours un cert individuel Let's Encrypt par app (via ensureCertificate).
+          // Le secret wildcard-tls n'est pas utilisé — il n'est pas garanti d'exister.
+          await this.k8s.applyIngress(effectiveApp);
         }
       }
 

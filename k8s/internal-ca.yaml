@@ -1,0 +1,45 @@
+# DÉSACTIVÉ — Let's Encrypt est utilisé pour tous les certificats (HTTP-01 via letsencrypt-prod)
+# Ce fichier est conservé comme référence pour une CA interne auto-signée (10 ans)
+# Utiliser uniquement si le port 80 n'est pas accessible depuis internet.
+#
+---
+# ── 1. Issuer auto-signé (bootstrap uniquement, sert à créer le CA) ───────────
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-bootstrap
+spec:
+  selfSigned: {}
+---
+# ── 2. Certificat CA racine (20 ans) ─────────────────────────────────────────
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: appk3s-internal-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: AppK3s Internal CA
+  subject:
+    organizations:
+      - AppK3s
+    organizationalUnits:
+      - Internal PKI
+  duration: 175200h       # 20 ans
+  renewBefore: 8760h      # renouvelle 1 an avant expiry
+  secretName: appk3s-internal-ca-tls
+  privateKey:
+    algorithm: ECDSA
+    size: 384
+  issuerRef:
+    name: selfsigned-bootstrap
+    kind: ClusterIssuer
+---
+# ── 3. ClusterIssuer CA (utilisé par toutes les apps) ────────────────────────
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: appk3s-ca-issuer
+spec:
+  ca:
+    secretName: appk3s-internal-ca-tls
