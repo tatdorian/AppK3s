@@ -4,10 +4,12 @@ import type {
   Deployment,
   User,
   AppStatusInfo,
+  AppPermission,
   NodeInfo,
   ClusterSettings,
   CreateAppInput,
   UpdateAppInput,
+  SetPermissionInput,
   LoginInput,
   RegisterInput,
 } from '@appk3s/shared';
@@ -78,12 +80,24 @@ export const appsApi = {
 
   deployments: (id: string) =>
     http.get<Deployment[]>(`/api/apps/${id}/deployments`).then((r) => r.data),
+
+  // Droits d'accès (admin only)
+  getPermissions: (id: string) =>
+    http.get<AppPermission[]>(`/api/apps/${id}/permissions`).then((r) => r.data),
+
+  setPermission: (id: string, userId: string, data: SetPermissionInput) =>
+    http.put<AppPermission>(`/api/apps/${id}/permissions/${userId}`, data).then((r) => r.data),
+
+  deletePermission: (id: string, userId: string) =>
+    http.delete(`/api/apps/${id}/permissions/${userId}`),
 };
 
 // ─── Nodes ───────────────────────────────────────────────────────────────────
 
 export const nodesApi = {
   list: () => http.get<NodeInfo[]>('/api/nodes').then((r) => r.data),
+  joinCommand: () =>
+    http.get<{ command: string; masterIP: string; token: string }>('/api/nodes/join-command').then((r) => r.data),
 };
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -91,7 +105,15 @@ export const nodesApi = {
 export const settingsApi = {
   get: () => http.get<ClusterSettings>('/api/settings').then((r) => r.data),
   update: (data: Partial<ClusterSettings>) =>
-    http.patch<ClusterSettings>('/api/settings', data).then((r) => r.data),
+    http.patch('/api/settings', data).then((r) => r.data),
+  getCertStatus: () =>
+    http.get<{ ready: boolean; message: string }>('/api/settings/cert-status').then((r) => r.data),
+};
+
+// ─── Templates ────────────────────────────────────────────────────────────────
+
+export const templatesApi = {
+  list: () => http.get<import('@appk3s/shared').AppTemplate[]>('/api/templates').then((r) => r.data),
 };
 
 // ─── Users ────────────────────────────────────────────────────────────────────

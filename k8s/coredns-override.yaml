@@ -1,6 +1,11 @@
 ---
-# Override CoreDNS : résout *.w0.app.syit.fr vers le master node en interne
-# Contourne le hairpin NAT pour que cert-manager puisse valider le challenge ACME
+# Override CoreDNS : résout *.app.syit.fr (et donc *.w0.app.syit.fr) vers le
+# master node en interne. Utilise le plugin "template" pour un wildcard
+# automatique — tout nouveau sous-domaine déployé est couvert sans modification.
+# Contourne le hairpin NAT pour que cert-manager valide le challenge ACME HTTP-01.
+#
+# ⚠ Ce fichier est mis à jour automatiquement par l'API (Settings → IP master /
+#   Domaine wildcard). Ne pas modifier à la main sauf maintenance.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,11 +13,14 @@ metadata:
   namespace: kube-system
 data:
   syit.server: |
-    w0.app.syit.fr:53 {
-      hosts {
-        192.168.188.10 appk3s.w0.app.syit.fr
-        192.168.188.10 nginx.w0.app.syit.fr
-        fallthrough
+    app.syit.fr:53 {
+      template IN A app.syit.fr {
+        match ^(.+\.)?app\.syit\.fr\.$
+        answer "{{ .Name }} 60 IN A 192.168.188.10"
+      }
+      template IN AAAA app.syit.fr {
+        match ^(.+\.)?app\.syit\.fr\.$
+        rcode NOERROR
       }
       forward . /etc/resolv.conf
     }

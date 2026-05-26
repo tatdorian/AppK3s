@@ -211,7 +211,15 @@ export class KubernetesService {
 
   // ─── Ingress ─────────────────────────────────────────────────────────────────
 
-  async applyIngress(app: DbApplication): Promise<void> {
+  async applyIngress(
+    app: DbApplication,
+    /**
+     * Quand fourni, on réutilise ce secret TLS existant (ex: cert wildcard).
+     * Quand absent, cert-manager provisionne automatiquement un cert Let's Encrypt
+     * par app (annotation cluster-issuer + secret <appname>-tls).
+     */
+    wildcardCertSecret?: string,
+  ): Promise<void> {
     if (!app.subdomain || !app.domain) return;
 
     const name = `${app.name}-ingress`;
@@ -222,24 +230,33 @@ export class KubernetesService {
     const annotations: Record<string, string> = {};
     const ingressClass = app.ingressClass || 'traefik';
 
+    // Détermine le secret TLS et si cert-manager doit provisionner le cert
+    const useWildcard = !!wildcardCertSecret;
+    const certSecretName = wildcardCertSecret ?? `${app.name}-tls`;
+
     if (ingressClass === 'nginx') {
       if (app.tlsEnabled) {
         annotations['nginx.ingress.kubernetes.io/ssl-redirect'] = 'true';
-        annotations['cert-manager.io/cluster-issuer'] = 'letsencrypt-prod';
+        if (!useWildcard) {
+          annotations['cert-manager.io/cluster-issuer'] = 'letsencrypt-prod';
+        }
       }
     } else {
       // Traefik (k3s default)
       if (app.tlsEnabled) {
         annotations['traefik.ingress.kubernetes.io/router.entrypoints'] = 'web,websecure';
         annotations['traefik.ingress.kubernetes.io/router.middlewares'] = 'default-redirect-https@kubernetescrd';
-        annotations['cert-manager.io/cluster-issuer'] = 'letsencrypt-prod';
+        if (!useWildcard) {
+          // cert-manager provisionne automatiquement le cert via HTTP-01
+          annotations['cert-manager.io/cluster-issuer'] = 'letsencrypt-prod';
+        }
       } else {
         annotations['traefik.ingress.kubernetes.io/router.entrypoints'] = 'web';
       }
     }
 
     const tls: k8s.V1IngressTLS[] | undefined = app.tlsEnabled
-      ? [{ hosts: [host], secretName: `${app.name}-tls` }]
+      ? [{ hosts: [host], secretName: certSecretName }]
       : undefined;
 
     const body: k8s.V1Ingress = {

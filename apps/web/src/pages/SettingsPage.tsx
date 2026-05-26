@@ -11,6 +11,11 @@ import {
   EyeOff,
   ChevronDown,
   KeyRound,
+  Globe,
+  Lock,
+  CheckCircle2,
+  XCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth.js';
 import { settingsApi, usersApi } from '../lib/api.js';
@@ -304,6 +309,198 @@ function UserRow({
   );
 }
 
+// ── Wildcard & TLS section ────────────────────────────────────────────────────
+function WildcardSection({
+  settings,
+  onSave,
+  saving,
+}: {
+  settings: ClusterSettings | undefined;
+  onSave: (data: Partial<ClusterSettings>) => void;
+  saving: boolean;
+}) {
+  const [wildcardDomain, setWildcardDomain] = useState('');
+  const [interfaceDomain, setInterfaceDomain] = useState('');
+  const [masterNodeIp, setMasterNodeIp] = useState('');
+  const [acmeEmail, setAcmeEmail] = useState('');
+  const [ovhAppKey, setOvhAppKey] = useState('');
+  const [ovhAppSecret, setOvhAppSecret] = useState('');
+  const [ovhConsumerKey, setOvhConsumerKey] = useState('');
+
+  useEffect(() => {
+    if (!settings) return;
+    setWildcardDomain(settings.wildcardDomain ?? '');
+    setInterfaceDomain(settings.interfaceDomain ?? '');
+    setMasterNodeIp(settings.masterNodeIp ?? '');
+    setAcmeEmail(settings.acmeEmail ?? '');
+    setOvhAppKey(settings.ovhAppKey ?? '');
+    setOvhAppSecret(settings.ovhAppSecret ?? '');
+    setOvhConsumerKey(settings.ovhConsumerKey ?? '');
+  }, [settings]);
+
+  const { data: certStatus, refetch: refetchCert, isFetching: certFetching } = useQuery({
+    queryKey: ['cert-status'],
+    queryFn: settingsApi.getCertStatus,
+    refetchInterval: 15000,
+  });
+
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSave({ wildcardDomain, interfaceDomain, masterNodeIp, acmeEmail, ovhAppKey, ovhAppSecret, ovhConsumerKey });
+  };
+
+  const ovhDocsUrl = 'https://api.ovh.com/createApp/';
+  const ovhTokenUrl = wildcardDomain
+    ? `https://api.ovh.com/auth/?credentialType=applicationKey&applicationId=<APP_ID>&redirection=https://${wildcardDomain}`
+    : 'https://api.ovh.com/auth/';
+
+  return (
+    <form onSubmit={handleSave}>
+      <div className="card p-5 space-y-5">
+        <div className="flex items-center gap-2">
+          <Globe className="w-4 h-4 text-accent" />
+          <h2 className="text-sm font-semibold text-white">Wildcard & TLS automatique</h2>
+        </div>
+        <p className="text-xs text-slate-500 -mt-3">
+          Toutes les apps partagent un seul certificat wildcard Let's Encrypt via DNS-01 (OVH).
+          Changer le domaine met à jour automatiquement tous les ingresses.
+        </p>
+
+        {/* Domains + IP master */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="label flex items-center gap-1">
+              <Globe className="w-3 h-3" /> Domaine wildcard
+            </label>
+            <input
+              className="input"
+              placeholder="w0.app.syit.fr"
+              value={wildcardDomain}
+              onChange={(e) => setWildcardDomain(e.target.value.trim())}
+            />
+            {wildcardDomain && (
+              <p className="text-xs text-accent mt-1">
+                Apps sous : *.{wildcardDomain}
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="label flex items-center gap-1">
+              <Lock className="w-3 h-3" /> Domaine interface AppK3s
+            </label>
+            <input
+              className="input"
+              placeholder="appk3s.w0.app.syit.fr"
+              value={interfaceDomain}
+              onChange={(e) => setInterfaceDomain(e.target.value.trim())}
+            />
+          </div>
+        </div>
+
+        {/* Master node IP */}
+        <div>
+          <label className="label flex items-center gap-1">
+            <Globe className="w-3 h-3" /> IP du nœud master (routage interne CoreDNS)
+          </label>
+          <input
+            className="input font-mono"
+            placeholder="192.168.188.10"
+            value={masterNodeIp}
+            onChange={(e) => setMasterNodeIp(e.target.value.trim())}
+          />
+          <p className="text-xs text-slate-500 mt-1">
+            Tous les sous-domaines de <code>{wildcardDomain || 'votre-domaine'}</code> résoudront
+            vers cette IP au sein du cluster — nécessaire pour la validation ACME HTTP-01.
+            Changer cette valeur met à jour CoreDNS et reconfigure l'ingress de l'interface.
+          </p>
+        </div>
+
+        {/* ACME email */}
+        <div>
+          <label className="label">Email Let's Encrypt (ACME)</label>
+          <input
+            className="input"
+            type="email"
+            placeholder="admin@example.com"
+            value={acmeEmail}
+            onChange={(e) => setAcmeEmail(e.target.value.trim())}
+          />
+        </div>
+
+        {/* OVH credentials */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <label className="label mb-0">Credentials OVH API</label>
+            <a
+              href={ovhDocsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-accent hover:underline"
+            >
+              Créer une application OVH →
+            </a>
+          </div>
+          <div className="grid grid-cols-1 gap-2">
+            <div>
+              <label className="label text-xs text-slate-500">Application Key</label>
+              <PasswordInput value={ovhAppKey} onChange={setOvhAppKey} placeholder="AK_xxxxxxxxxxxxxxxx" />
+            </div>
+            <div>
+              <label className="label text-xs text-slate-500">Application Secret</label>
+              <PasswordInput value={ovhAppSecret} onChange={setOvhAppSecret} placeholder="AS_xxxxxxxxxxxxxxxx" />
+            </div>
+            <div>
+              <label className="label text-xs text-slate-500">Consumer Key</label>
+              <PasswordInput value={ovhConsumerKey} onChange={setOvhConsumerKey} placeholder="CK_xxxxxxxxxxxxxxxx" />
+            </div>
+          </div>
+          <p className="text-xs text-slate-600">
+            Le Consumer Key doit avoir les droits GET/POST/PUT/DELETE sur <code>/domain/zone/*</code>.{' '}
+            <a href={ovhTokenUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+              Générer un token →
+            </a>
+          </p>
+        </div>
+
+        {/* Cert status */}
+        {wildcardDomain && (
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-surface-100 border border-slate-700/40">
+            {certFetching ? (
+              <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+            ) : certStatus?.ready ? (
+              <CheckCircle2 className="w-4 h-4 text-green-400" />
+            ) : (
+              <XCircle className="w-4 h-4 text-red-400" />
+            )}
+            <span className="text-xs text-slate-300 flex-1">
+              {certStatus?.ready
+                ? `Certificat *.${wildcardDomain} actif`
+                : certStatus?.message || 'Certificat en attente…'}
+            </span>
+            <button
+              type="button"
+              onClick={() => refetchCert()}
+              className="text-slate-500 hover:text-slate-200"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        <div className="flex justify-end pt-1">
+          <button type="submit" className="btn-primary" disabled={saving}>
+            {saving ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Application…</>
+            ) : (
+              <><Save className="w-4 h-4" /> Appliquer</>
+            )}
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export function SettingsPage() {
   const { user } = useAuthStore();
@@ -321,31 +518,33 @@ export function SettingsPage() {
     enabled: isAdmin,
   });
 
-  const [defaultDomain, setDefaultDomain] = useState('');
   const [defaultIngressClass, setDefaultIngressClass] = useState('traefik');
   const [defaultTls, setDefaultTls] = useState(false);
   const [showCreateUser, setShowCreateUser] = useState(false);
 
   useEffect(() => {
     if (!settings) return;
-    setDefaultDomain(settings.defaultDomain ?? '');
     setDefaultIngressClass(settings.defaultIngressClass ?? 'traefik');
     setDefaultTls(settings.defaultTls === 'true');
   }, [settings]);
 
   const saveMut = useMutation({
     mutationFn: (data: Partial<ClusterSettings>) => settingsApi.update(data),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['settings'] });
-      toast.success('Paramètres sauvegardés');
+      qc.invalidateQueries({ queryKey: ['cert-status'] });
+      if ('warning' in (result as object)) {
+        toast.error(`Sauvegardé avec avertissement : ${(result as { warning: string }).warning}`);
+      } else {
+        toast.success('Paramètres sauvegardés');
+      }
     },
     onError: () => toast.error('Échec de la sauvegarde'),
   });
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleDefaultsSave = (e: React.FormEvent) => {
     e.preventDefault();
     saveMut.mutate({
-      defaultDomain,
       defaultIngressClass,
       defaultTls: String(defaultTls),
     });
@@ -355,7 +554,7 @@ export function SettingsPage() {
     <div className="p-8 max-w-2xl mx-auto space-y-6">
       <div className="mb-2">
         <h1 className="text-2xl font-bold text-white">Paramètres</h1>
-        <p className="text-slate-400 text-sm mt-1">Configuration du compte et du cluster</p>
+        <p className="text-slate-400 text-sm mt-1">Configuration du cluster et des domaines</p>
       </div>
 
       {/* Account */}
@@ -371,8 +570,15 @@ export function SettingsPage() {
         </div>
       </div>
 
+      {/* Wildcard & TLS — most important section */}
+      <WildcardSection
+        settings={settings}
+        onSave={(data) => saveMut.mutate(data)}
+        saving={saveMut.isPending}
+      />
+
       {/* Global deployment defaults */}
-      <form onSubmit={handleSave}>
+      <form onSubmit={handleDefaultsSave}>
         <div className="card p-5 space-y-4">
           <div className="flex items-center justify-between">
             <div>
@@ -382,25 +588,6 @@ export function SettingsPage() {
               </p>
             </div>
             {settingsLoading && <Loader2 className="w-4 h-4 animate-spin text-slate-500" />}
-          </div>
-
-          {/* Wildcard domain */}
-          <div>
-            <label className="label">Domaine wildcard *</label>
-            <input
-              className="input"
-              placeholder="w0.app.syit.fr"
-              value={defaultDomain}
-              onChange={(e) => setDefaultDomain(e.target.value.trim())}
-            />
-            <p className="text-xs text-slate-600 mt-1">
-              Sera utilisé comme domaine par défaut pour tous les déploiements.
-              {defaultDomain && (
-                <span className="text-accent ml-1">
-                  Exemple : mon-app.{defaultDomain}
-                </span>
-              )}
-            </p>
           </div>
 
           {/* Ingress class */}
@@ -426,7 +613,7 @@ export function SettingsPage() {
               className="w-4 h-4 rounded accent-accent"
             />
             <label htmlFor="defaultTls" className="text-sm text-slate-300">
-              Activer TLS par défaut
+              Activer TLS par défaut (nécessite le cert wildcard)
             </label>
           </div>
 

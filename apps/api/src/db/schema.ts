@@ -53,6 +53,9 @@ export const applications = pgTable('applications', {
   ports: json('ports').$type<Port[]>().notNull().default([]),
   volumes: json('volumes').$type<Volume[]>().notNull().default([]),
 
+  // Template
+  templateId: varchar('template_id', { length: 100 }),
+
   // Domain config
   subdomain: varchar('subdomain', { length: 255 }),
   domain: varchar('domain', { length: 255 }),
@@ -86,7 +89,26 @@ export const settings = pgTable('settings', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
+export const appPermissions = pgTable(
+  'app_permissions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    appId: uuid('app_id')
+      .notNull()
+      .references(() => applications.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    canView:   boolean('can_view').notNull().default(true),
+    canDeploy: boolean('can_deploy').notNull().default(false),
+    canEdit:   boolean('can_edit').notNull().default(false),
+    canDelete: boolean('can_delete').notNull().default(false),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+);
+
 export type DbUser = typeof users.$inferSelect;
 export type DbApplication = typeof applications.$inferSelect;
 export type DbDeployment = typeof deployments.$inferSelect;
 export type DbSetting = typeof settings.$inferSelect;
+export type DbAppPermission = typeof appPermissions.$inferSelect;

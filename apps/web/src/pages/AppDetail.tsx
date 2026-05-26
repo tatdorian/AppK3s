@@ -16,18 +16,21 @@ import {
   Plus,
   Minus,
   AlertTriangle,
+  ShieldCheck,
+  Save,
 } from 'lucide-react';
 import { useApp, useAppStatus, useDeployments, useUpdateApp, useDeleteApp } from '../hooks/useApps.js';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { appsApi } from '../lib/api.js';
 import { StatusBadge } from '../components/StatusBadge.js';
 import { LogsViewer } from '../components/LogsViewer.js';
 import { EnvVarsEditor } from '../components/EnvVarsEditor.js';
 import { formatDate, relativeTime } from '../lib/utils.js';
-import type { EnvVar, Port } from '@appk3s/shared';
+import { useAuthStore } from '../store/auth.js';
+import type { EnvVar, Port, SetPermissionInput } from '@appk3s/shared';
 import toast from 'react-hot-toast';
 
-type Tab = 'overview' | 'config' | 'environment' | 'logs' | 'deployments';
+type Tab = 'overview' | 'config' | 'environment' | 'logs' | 'deployments' | 'access';
 
 interface ConfigForm {
   name: string;
@@ -48,6 +51,9 @@ export function AppDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === 'admin';
+
   const [tab, setTab] = useState<Tab>('overview');
   const [envVars, setEnvVars] = useState<EnvVar[] | null>(null);
   const [configForm, setConfigForm] = useState<ConfigForm | null>(null);
@@ -58,6 +64,32 @@ export function AppDetail() {
   const { data: deployments = [] } = useDeployments(id!);
   const updateMut = useUpdateApp(id!);
   const deleteMut = useDeleteApp();
+
+  // Permissions tab data (admin only)
+  const { data: permUsers = [], refetch: refetchPerms } = useQuery({
+    queryKey: ['app-permissions', id],
+    queryFn: () => appsApi.getPermissions(id!),
+    enabled: isAdmin && !!id,
+  });
+
+  // Local copy of permissions for editing (keyed by userId)
+  const [permEdits, setPermEdits] = useState<Record<string, SetPermissionInput>>({});
+
+  const savePermMut = useMutation({
+    mutationFn: async () => {
+      await Promise.all(
+        Object.entries(permEdits).map(([userId, data]) =>
+          appsApi.setPermission(id!, userId, data),
+        ),
+      );
+    },
+    onSuccess: () => {
+      toast.success('Droits sauvegardés');
+      setPermEdits({});
+      refetchPerms();
+    },
+    onError: () => toast.error('Échec de la sauvegarde'),
+  });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['apps', id] });
 
@@ -114,12 +146,13 @@ export function AppDetail() {
   const accessUrl = status?.accessUrl;
   const nameChanged = configForm?.name !== app.name;
 
-  const tabs: { id: Tab; label: string }[] = [
+  const tabs: { id: Tab; label: string; adminOnly?: boolean }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'config', label: 'Configuration' },
     { id: 'environment', label: 'Env Vars' },
     { id: 'logs', label: 'Logs' },
     { id: 'deployments', label: 'Déploiements' },
+    { id: 'access', label: 'Accès', adminOnly: true },
   ];
 
   const handleDelete = async () => {
@@ -322,7 +355,7 @@ export function AppDetail() {
       {/* Tabs */}
       <div className="border-b border-slate-700/50 mb-6">
         <nav className="flex gap-1">
-          {tabs.map((t) => (
+          {tabs.filter((t) => !t.adminOnly || isAdmin).map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
@@ -333,6 +366,7 @@ export function AppDetail() {
               }`}
             >
               {t.id === 'config' && <Settings className="w-3.5 h-3.5" />}
+              {t.id === 'access' && <ShieldCheck className="w-3.5 h-3.5" />}
               {t.label}
             </button>
           ))}
@@ -647,6 +681,110 @@ export function AppDetail() {
       {tab === 'logs' && (
         <div className="card overflow-hidden h-[500px]">
           <LogsViewer appId={app.id} />
+        </div>
+      )}
+
+      {/* ── Accès ────────────────────────────────────────────────────────────── */}
+      {tab === 'access' && isAdmin && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-white">Droits d'accès par utilisateur</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Les admins ont toujours accès complet. Configurez ici les droits des autres rôles.
+              </p>
+            </div>
+            {Object.keys(permEdits).length > 0 && (
+              <button
+                className="btn-primary py-1.5 text-sm"
+                onClick={() => savePermMut.mutate()}
+                disabled={savePermMut.isPending}
+              >
+                <Save className="w-3.5 h-3.5" />
+                {savePermMut.isPending ? 'Sauvegarde...' : 'Sauvegarder les droits'}
+              </button>
+            )}
+          </div>
+
+          {permUsers.length === 0 ? (
+            <div className="card p-6 text-center text-slate-500 text-sm">
+              Aucun autre utilisateur. Créez des utilisateurs dans les Paramètres.
+            </div>
+          ) : (
+            <div className="card overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700/40">
+                    <th className="px-4 py-3 text-left text-xs text-slate-500 font-medium">Utilisateur</th>
+                    <th className="px-4 py-3 text-center text-xs text-slate-500 font-medium">Voir</th>
+                    <th className="px-4 py-3 text-center text-xs text-slate-500 font-medium">Déployer</th>
+                    <th className="px-4 py-3 text-center text-xs text-slate-500 font-medium">Modifier</th>
+                    <th className="px-4 py-3 text-center text-xs text-slate-500 font-medium">Supprimer</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {permUsers.map((u: any) => {
+                    // Valeurs en cours d'édition ou valeurs serveur
+                    const cur: SetPermissionInput = permEdits[u.userId] ?? {
+                      canView:   u.canView,
+                      canDeploy: u.canDeploy,
+                      canEdit:   u.canEdit,
+                      canDelete: u.canDelete,
+                    };
+                    const isDirty = !!permEdits[u.userId];
+
+                    const setPerm = (field: keyof SetPermissionInput, val: boolean) => {
+                      setPermEdits((prev) => ({
+                        ...prev,
+                        [u.userId]: { ...cur, [field]: val },
+                      }));
+                    };
+
+                    return (
+                      <tr
+                        key={u.userId}
+                        className={`border-b border-slate-700/20 last:border-0 transition-colors ${
+                          isDirty ? 'bg-accent/5' : 'hover:bg-surface-200/30'
+                        }`}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-semibold text-slate-300 shrink-0">
+                              {u.email[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="text-sm text-white">{u.email}</p>
+                              <p className="text-xs text-slate-500">{u.role}</p>
+                            </div>
+                            {isDirty && (
+                              <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-accent/20 text-accent">modifié</span>
+                            )}
+                          </div>
+                        </td>
+                        {(['canView', 'canDeploy', 'canEdit', 'canDelete'] as const).map((field) => (
+                          <td key={field} className="px-4 py-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={cur[field]}
+                              onChange={(e) => setPerm(field, e.target.checked)}
+                              className="w-4 h-4 rounded accent-accent cursor-pointer"
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="text-xs text-slate-600">
+            💡 <strong className="text-slate-500">Voir</strong> = accès lecture (liste, logs, status) ·{' '}
+            <strong className="text-slate-500">Déployer</strong> = deploy / start / stop / restart ·{' '}
+            <strong className="text-slate-500">Modifier</strong> = config & env vars ·{' '}
+            <strong className="text-slate-500">Supprimer</strong> = suppression de l'app
+          </p>
         </div>
       )}
 

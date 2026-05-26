@@ -25,6 +25,7 @@ export const createAppSchema = z.object({
     .regex(/^[a-z0-9-]+$/, 'Lowercase letters, numbers and hyphens only'),
   namespace: z.string().default('default'),
   type: z.enum(['docker-image', 'compose']),
+  templateId: z.string().optional(),
   image: z.string().optional(),
   imageTag: z.string().default('latest'),
   composeContent: z.string().optional(),
@@ -42,6 +43,15 @@ export const createAppSchema = z.object({
 
 // type is immutable after creation; name is editable (triggers k8s resource rename)
 export const updateAppSchema = createAppSchema.partial().omit({ type: true });
+
+export const setPermissionSchema = z.object({
+  canView:   z.boolean().default(true),
+  canDeploy: z.boolean().default(false),
+  canEdit:   z.boolean().default(false),
+  canDelete: z.boolean().default(false),
+});
+
+export type SetPermissionInput = z.infer<typeof setPermissionSchema>;
 
 export const loginSchema = z.object({
   email: z.string().email(),

@@ -118,6 +118,27 @@ export interface ClusterSettings {
   defaultDomain: string;
   defaultIngressClass: string;
   defaultTls: string;
+  // Wildcard domain & TLS
+  wildcardDomain: string;
+  interfaceDomain: string;
+  masterNodeIp: string;
+  acmeEmail: string;
+  ovhAppKey: string;
+  ovhAppSecret: string;
+  ovhConsumerKey: string;
+}
+
+export interface AppPermission {
+  id: string;
+  appId: string;
+  userId: string;
+  canView: boolean;
+  canDeploy: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  createdAt: string;
+  /** Populated when fetching app permissions list */
+  user?: Pick<User, 'id' | 'email' | 'role'>;
 }
 
 export interface PaginatedResponse<T> {

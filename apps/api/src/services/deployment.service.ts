@@ -44,9 +44,10 @@ export class DeploymentService {
 
       // Auto-assign subdomain from cluster defaultDomain if none set
       let effectiveApp = app;
+      const settingsRows = await db.query.settings.findMany();
+      const settingsMap = Object.fromEntries(settingsRows.map((r) => [r.key, r.value]));
+
       if (!app.subdomain || !app.domain) {
-        const settingsRows = await db.query.settings.findMany();
-        const settingsMap = Object.fromEntries(settingsRows.map((r) => [r.key, r.value]));
         const defaultDomain = settingsMap['defaultDomain'] ?? '';
         const defaultIngressClass = settingsMap['defaultIngressClass'] ?? 'traefik';
 
@@ -92,7 +93,14 @@ export class DeploymentService {
           await appendLog(
             `[${new Date().toISOString()}] Applying Ingress: ${effectiveApp.subdomain}.${effectiveApp.domain}`,
           );
-          await this.k8s.applyIngress(effectiveApp);
+          // Utilise le cert wildcard si wildcardDomain correspond au domaine de l'app,
+          // sinon cert-manager provisionne automatiquement un cert Let's Encrypt par app.
+          const wildcardDomain = settingsMap['wildcardDomain'] ?? '';
+          const certSecret =
+            wildcardDomain && effectiveApp.domain === wildcardDomain
+              ? 'wildcard-tls'
+              : undefined;
+          await this.k8s.applyIngress(effectiveApp, certSecret);
         }
       }
 
