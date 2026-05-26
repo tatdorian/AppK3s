@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Server, Shield, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { authApi } from '../lib/api.js';
@@ -7,30 +7,38 @@ import toast from 'react-hot-toast';
 
 export function SetupPage() {
   const navigate = useNavigate();
-  const setAuth = useAuthStore((s) => s.setAuth);
+  const { setAuth, isAuthenticated } = useAuthStore();
 
-  const [email, setEmail] = useState('');
+  const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [showPw, setShowPw] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [confirm, setConfirm]   = useState('');
+  const [showPw, setShowPw]     = useState(false);
+  const [loading, setLoading]   = useState(false);
+  const [checking, setChecking] = useState(true);
+
+  // Redirect si déjà connecté OU si setup déjà fait
+  useEffect(() => {
+    if (isAuthenticated()) { navigate('/', { replace: true }); return; }
+
+    authApi.setupStatus()
+      .then(({ setupRequired }) => {
+        if (!setupRequired) navigate('/login', { replace: true });
+        else setChecking(false);
+      })
+      .catch(() => setChecking(false));
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password !== confirm) {
-      toast.error('Les mots de passe ne correspondent pas');
-      return;
-    }
-    if (password.length < 8) {
-      toast.error('Le mot de passe doit faire au moins 8 caractères');
-      return;
-    }
+    if (password !== confirm) { toast.error('Les mots de passe ne correspondent pas'); return; }
+    if (password.length < 8)  { toast.error('Mot de passe : 8 caractères minimum'); return; }
+
     setLoading(true);
     try {
       const { token, user } = await authApi.register({ email, password });
       setAuth(token, user);
       toast.success('Compte administrateur créé — bienvenue !');
-      navigate('/');
+      navigate('/', { replace: true });
     } catch (err: any) {
       toast.error(err?.response?.data?.message ?? 'Erreur lors de la création');
     } finally {
@@ -38,35 +46,48 @@ export function SetupPage() {
     }
   };
 
+  if (checking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface">
+        <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-surface px-4">
       <div className="w-full max-w-md">
-        {/* Header */}
+
+        {/* Logo + titre */}
         <div className="flex flex-col items-center gap-3 mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-accent flex items-center justify-center shadow-lg shadow-accent/30">
-            <Server className="w-7 h-7 text-white" />
+          <div className="w-16 h-16 rounded-2xl bg-accent flex items-center justify-center shadow-lg shadow-accent/30">
+            <Server className="w-8 h-8 text-white" />
           </div>
           <div className="text-center">
             <h1 className="text-2xl font-bold text-white">Bienvenue sur AppK3s</h1>
             <p className="text-slate-400 text-sm mt-1">
-              Créez votre premier compte administrateur général
+              Première connexion — créez votre compte administrateur
             </p>
           </div>
         </div>
 
-        {/* Info card */}
-        <div className="card p-4 mb-5 flex items-start gap-3">
-          <Shield className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-          <div className="text-xs text-slate-400 space-y-1">
-            <p className="text-white font-medium">Admin général</p>
-            <p>Accès complet à toutes les ressources, projets, utilisateurs et paramètres du cluster.</p>
+        {/* Bandeau info */}
+        <div className="card p-4 mb-5 flex items-start gap-3 border-accent/30 bg-accent/5">
+          <Shield className="w-5 h-5 text-accent shrink-0 mt-0.5" />
+          <div>
+            <p className="text-white font-medium text-sm">Administrateur général</p>
+            <p className="text-slate-400 text-xs leading-relaxed mt-0.5">
+              Ce compte aura accès à toutes les ressources, projets, utilisateurs
+              et paramètres du cluster. Il pourra créer d'autres comptes.
+            </p>
           </div>
         </div>
 
-        {/* Form */}
+        {/* Formulaire */}
         <form onSubmit={submit} className="card p-6 space-y-4">
+
           <div>
-            <label className="label">Email *</label>
+            <label className="label">Adresse email *</label>
             <input
               type="email"
               className="input"
@@ -75,11 +96,15 @@ export function SetupPage() {
               onChange={(e) => setEmail(e.target.value)}
               required
               autoFocus
+              autoComplete="email"
             />
           </div>
 
           <div>
-            <label className="label">Mot de passe * <span className="text-slate-600">(8 caractères min)</span></label>
+            <label className="label">
+              Mot de passe *{' '}
+              <span className="text-slate-600 font-normal">8 caractères min.</span>
+            </label>
             <div className="relative">
               <input
                 type={showPw ? 'text' : 'password'}
@@ -92,44 +117,80 @@ export function SetupPage() {
               />
               <button
                 type="button"
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                tabIndex={-1}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
                 onClick={() => setShowPw((v) => !v)}
               >
                 {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
+
+            {/* Indicateur de force */}
+            {password.length > 0 && (
+              <div className="mt-2 flex items-center gap-1">
+                {[1, 2, 3, 4].map((lvl) => (
+                  <div
+                    key={lvl}
+                    className={`h-1 flex-1 rounded-full transition-colors ${
+                      passwordStrength(password) >= lvl
+                        ? lvl === 1 ? 'bg-red-500'
+                        : lvl === 2 ? 'bg-orange-500'
+                        : lvl === 3 ? 'bg-yellow-500'
+                        : 'bg-emerald-500'
+                        : 'bg-slate-700'
+                    }`}
+                  />
+                ))}
+                <span className="text-xs text-slate-500 ml-1 w-10 shrink-0">
+                  {['', 'Faible', 'Moyen', 'Bon', 'Fort'][passwordStrength(password)]}
+                </span>
+              </div>
+            )}
           </div>
 
           <div>
             <label className="label">Confirmer le mot de passe *</label>
             <input
               type={showPw ? 'text' : 'password'}
-              className="input"
+              className={`input ${
+                confirm && confirm !== password ? 'border-red-500/60 focus:border-red-500' : ''
+              }`}
               placeholder="••••••••"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               required
               autoComplete="new-password"
             />
+            {confirm && confirm !== password && (
+              <p className="text-xs text-red-400 mt-1">Les mots de passe ne correspondent pas</p>
+            )}
           </div>
 
           <button
             type="submit"
-            className="btn-primary w-full justify-center py-2.5 mt-2"
-            disabled={!email || !password || !confirm || loading}
+            className="btn-primary w-full justify-center py-3 mt-2 text-sm font-semibold"
+            disabled={!email || !password || password !== confirm || loading}
           >
-            {loading ? (
-              <><Loader2 className="w-4 h-4 animate-spin" /> Création en cours…</>
-            ) : (
-              <><Shield className="w-4 h-4" /> Créer le compte admin</>
-            )}
+            {loading
+              ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Création en cours…</>
+              : <><Shield className="w-4 h-4 mr-2" />Créer le compte administrateur</>
+            }
           </button>
         </form>
 
         <p className="text-center text-xs text-slate-600 mt-4">
-          Ce formulaire disparaît une fois le premier compte créé.
+          Ce formulaire n'est accessible qu'une seule fois — lors du premier lancement.
         </p>
       </div>
     </div>
   );
+}
+
+function passwordStrength(pw: string): number {
+  let s = 0;
+  if (pw.length >= 8)  s++;
+  if (pw.length >= 12) s++;
+  if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) s++;
+  if (/[0-9]/.test(pw) || /[^A-Za-z0-9]/.test(pw)) s++;
+  return Math.min(s, 4) as 1 | 2 | 3 | 4;
 }

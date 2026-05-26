@@ -28,19 +28,38 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/** Vérifie le statut de setup au démarrage et redirige vers /setup si aucun user */
+/**
+ * Vérifie au démarrage si aucun utilisateur n'existe.
+ * - Aucun user → redirige vers /setup (création du compte admin)
+ * - Au moins un user → laisse passer vers /login ou l'app normalement
+ * - Si déjà connecté et setup déjà fait → laisse passer directement
+ */
 function SetupGate({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
+  const { isAuthenticated } = useAuthStore();
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
-    authApi.setupStatus().then(({ setupRequired }) => {
-      if (setupRequired) navigate('/setup', { replace: true });
-      setChecked(true);
-    }).catch(() => setChecked(true)); // Si l'API est down, on laisse passer
+    // Si déjà authentifié, inutile de vérifier
+    if (isAuthenticated()) { setChecked(true); return; }
+
+    authApi.setupStatus()
+      .then(({ setupRequired }) => {
+        if (setupRequired) navigate('/setup', { replace: true });
+        setChecked(true);
+      })
+      .catch(() => setChecked(true)); // API down → on laisse passer, login affichera l'erreur
   }, []);
 
-  if (!checked) return null;
+  // Spinner centré pendant la vérification (évite la page blanche)
+  if (!checked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface">
+        <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return <>{children}</>;
 }
 
