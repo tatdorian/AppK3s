@@ -129,12 +129,13 @@ else
   ok "k3s installé"
 fi
 
-# Attendre que k3s soit prêt
+# Attendre que k3s soit prêt ET que le node soit Ready
 echo -n "  Attente du cluster k3s"
-for i in $(seq 1 60); do
-  kubectl get nodes &>/dev/null 2>&1 && { echo ""; break; }
+for i in $(seq 1 80); do
+  STATUS=$(kubectl get nodes --no-headers 2>/dev/null | awk '{print $2}' | head -1)
+  [[ "$STATUS" == "Ready" ]] && { echo ""; break; }
   echo -n "."; sleep 3
-  [[ $i -eq 60 ]] && die "k3s ne démarre pas après 3 minutes"
+  [[ $i -eq 80 ]] && die "k3s ne passe pas Ready après 4 minutes"
 done
 ok "Cluster k3s opérationnel"
 
@@ -151,9 +152,8 @@ kubectl get nodes | sed 's/^/    /'
 step "5/8  Sources AppK3s"
 
 if [[ -d "${APP_DIR}/.git" ]]; then
-  warn "Dossier ${APP_DIR} existant — mise à jour (git pull)"
-  git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}" 2>/dev/null \
-    || warn "git pull ignoré (modifications locales)"
+  warn "Dossier ${APP_DIR} existant — on garde le code local (pas de git pull)"
+  ok "Sources existantes conservées (${APP_DIR})"
 else
   git clone --branch "${BRANCH}" "${REPO_URL}" "${APP_DIR}"
   ok "Repo cloné dans ${APP_DIR}"
@@ -282,24 +282,39 @@ step "7/8  PostgreSQL + Redis + dépendances + migrations"
 cd "${APP_DIR}"
 
 # Démarrer PostgreSQL & Redis via Docker Compose
-docker compose up -d --wait 2>/dev/null || docker compose up -d
+docker compose up -d 2>&1 | grep -v "^$" || true
 echo -n "  Attente de PostgreSQL"
-for i in $(seq 1 30); do
+for i in $(seq 1 40); do
   docker compose exec -T postgres pg_isready -U "${DB_USER}" &>/dev/null && { echo ""; break; }
-  echo -n "."; sleep 2
-  [[ $i -eq 30 ]] && die "PostgreSQL ne démarre pas"
+  echo -n "."; sleep 3
+  [[ $i -eq 40 ]] && die "PostgreSQL ne démarre pas après 2 minutes"
 done
 ok "PostgreSQL prêt"
 
-docker compose exec -T redis redis-cli ping &>/dev/null && ok "Redis prêt"
+docker compose exec -T redis redis-cli ping &>/dev/null && ok "Redis prêt" || warn "Redis pas encore prêt"
 
 # Dépendances Node.js
-pnpm install --frozen-lockfile 2>&1 | tail -2
+# pnpm 9+ requiert d'approuver les scripts de build — on désactive le strict mode
+# pour l'installation automatique (non-interactive)
+cat >> "${APP_DIR}/.npmrc" <<'NPMRC'
+strict-dep-builds=false
+NPMRC
+
+info "Installation des dépendances Node.js (peut prendre 1-2 minutes)..."
+if ! pnpm install --no-frozen-lockfile 2>&1; then
+  # Fallback : approuver tous les builds puis réessayer
+  warn "Premier essai échoué, approbation des builds en cours..."
+  pnpm approve-builds --all 2>/dev/null || true
+  pnpm install --no-frozen-lockfile 2>&1 | tail -5
+fi
 ok "pnpm install terminé"
 
 # Migrations base de données
-DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}" \
-  pnpm db:migrate 2>&1 | tail -3
+info "Migration de la base de données..."
+if ! DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}" \
+  pnpm db:migrate 2>&1; then
+  die "Migrations échouées — vérifiez que PostgreSQL est accessible"
+fi
 ok "Migrations BDD terminées"
 
 # ═════════════════════════════════════════════════════════════════════════════
