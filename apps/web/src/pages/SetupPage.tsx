@@ -1,32 +1,22 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState } from 'react';
 import { Server, Shield, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { authApi } from '../lib/api.js';
 import { useAuthStore } from '../store/auth.js';
 import toast from 'react-hot-toast';
 
-export function SetupPage() {
-  const navigate = useNavigate();
-  const { setAuth, isAuthenticated } = useAuthStore();
+interface Props {
+  /** Appelé après création du compte — App.tsx bascule vers les routes normales */
+  onComplete?: () => void;
+}
+
+export function SetupPage({ onComplete }: Props) {
+  const { setAuth } = useAuthStore();
 
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm]   = useState('');
   const [showPw, setShowPw]     = useState(false);
   const [loading, setLoading]   = useState(false);
-  const [checking, setChecking] = useState(true);
-
-  // Redirect si déjà connecté OU si setup déjà fait
-  useEffect(() => {
-    if (isAuthenticated()) { navigate('/', { replace: true }); return; }
-
-    authApi.setupStatus()
-      .then(({ setupRequired }) => {
-        if (!setupRequired) navigate('/login', { replace: true });
-        else setChecking(false);
-      })
-      .catch(() => setChecking(false));
-  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,21 +28,13 @@ export function SetupPage() {
       const { token, user } = await authApi.register({ email, password });
       setAuth(token, user);
       toast.success('Compte administrateur créé — bienvenue !');
-      navigate('/', { replace: true });
+      onComplete?.(); // App bascule vers les routes normales → / s'affiche
     } catch (err: any) {
       toast.error(err?.response?.data?.message ?? 'Erreur lors de la création');
     } finally {
       setLoading(false);
     }
   };
-
-  if (checking) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-surface">
-        <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-surface px-4">

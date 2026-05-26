@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { Layout } from './components/layout/Layout.js';
 import { LoginPage } from './pages/LoginPage.js';
@@ -28,78 +28,90 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/**
- * Vérifie au démarrage si aucun utilisateur n'existe.
- * - Aucun user → redirige vers /setup (création du compte admin)
- * - Au moins un user → laisse passer vers /login ou l'app normalement
- * - Si déjà connecté et setup déjà fait → laisse passer directement
- */
-function SetupGate({ children }: { children: React.ReactNode }) {
-  const navigate = useNavigate();
-  const { isAuthenticated } = useAuthStore();
-  const [checked, setChecked] = useState(false);
-
-  useEffect(() => {
-    // Si déjà authentifié, inutile de vérifier
-    if (isAuthenticated()) { setChecked(true); return; }
-
-    authApi.setupStatus()
-      .then(({ setupRequired }) => {
-        if (setupRequired) navigate('/setup', { replace: true });
-        setChecked(true);
-      })
-      .catch(() => setChecked(true)); // API down → on laisse passer, login affichera l'erreur
-  }, []);
-
-  // Spinner centré pendant la vérification (évite la page blanche)
-  if (!checked) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-surface">
-        <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  return <>{children}</>;
+// ─── Spinner plein écran ──────────────────────────────────────────────────────
+function FullScreenSpinner() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-surface">
+      <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
 }
 
+// ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const { token, setAuth, logout } = useAuthStore();
 
-  // Hydrate user info on load
+  /**
+   * null  = vérification en cours (spinner)
+   * true  = aucun compte → montrer /setup en exclusif
+   * false = au moins un compte → routes normales
+   */
+  const [setupRequired, setSetupRequired] = useState<boolean | null>(null);
+
   useEffect(() => {
-    if (!token) return;
-    authApi.me().then((user) => setAuth(token, user)).catch(logout);
+    // Hydrate le user si déjà connecté
+    if (token) {
+      authApi.me().then((user) => setAuth(token, user)).catch(logout);
+    }
+
+    // Vérifie si le setup initial est nécessaire
+    authApi.setupStatus()
+      .then(({ setupRequired: req }) => setSetupRequired(req))
+      .catch(() => setSetupRequired(false)); // API down → on suppose que c'est ok
   }, []);
 
+  // ── Chargement initial ──────────────────────────────────────────────────────
+  if (setupRequired === null) return <FullScreenSpinner />;
+
+  // ── Premier lancement : aucun compte en base ────────────────────────────────
+  // On affiche UNIQUEMENT la page de création du compte admin.
+  // Toutes les autres URLs redirigent vers /setup.
+  if (setupRequired) {
+    return (
+      <BrowserRouter>
+        <Routes>
+          <Route
+            path="/setup"
+            element={
+              <SetupPage onComplete={() => setSetupRequired(false)} />
+            }
+          />
+          <Route path="*" element={<Navigate to="/setup" replace />} />
+        </Routes>
+      </BrowserRouter>
+    );
+  }
+
+  // ── Application normale (au moins un compte existe) ─────────────────────────
   return (
     <BrowserRouter>
-      <SetupGate>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/setup" element={<SetupPage />} />
-          <Route
-            element={
-              <RequireAuth>
-                <Layout />
-              </RequireAuth>
-            }
-          >
-            <Route index element={<Dashboard />} />
-            <Route path="apps" element={<AppsPage />} />
-            <Route path="apps/new" element={<CreateApp />} />
-            <Route path="apps/:id" element={<AppDetail />} />
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        {/* /setup inaccessible une fois le compte créé */}
+        <Route path="/setup" element={<Navigate to="/login" replace />} />
 
-            {/* Admin-only routes */}
-            <Route path="nodes" element={<RequireAdmin><NodesPage /></RequireAdmin>} />
-            <Route path="settings" element={<RequireAdmin><SettingsPage /></RequireAdmin>} />
-            <Route path="users" element={<RequireAdmin><UsersPage /></RequireAdmin>} />
-            <Route path="projects" element={<RequireAdmin><ProjectsPage /></RequireAdmin>} />
-            <Route path="projects/:id" element={<RequireAdmin><ProjectDetail /></RequireAdmin>} />
-          </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </SetupGate>
+        <Route
+          element={
+            <RequireAuth>
+              <Layout />
+            </RequireAuth>
+          }
+        >
+          <Route index element={<Dashboard />} />
+          <Route path="apps" element={<AppsPage />} />
+          <Route path="apps/new" element={<CreateApp />} />
+          <Route path="apps/:id" element={<AppDetail />} />
+
+          {/* Admin-only */}
+          <Route path="nodes"          element={<RequireAdmin><NodesPage /></RequireAdmin>} />
+          <Route path="settings"       element={<RequireAdmin><SettingsPage /></RequireAdmin>} />
+          <Route path="users"          element={<RequireAdmin><UsersPage /></RequireAdmin>} />
+          <Route path="projects"       element={<RequireAdmin><ProjectsPage /></RequireAdmin>} />
+          <Route path="projects/:id"   element={<RequireAdmin><ProjectDetail /></RequireAdmin>} />
+        </Route>
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </BrowserRouter>
   );
 }
