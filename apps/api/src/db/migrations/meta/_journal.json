@@ -29,6 +29,27 @@
       "when": 1748045000000,
       "tag": "0003_app_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1748700000000,
+      "tag": "0004_rbac",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1748800000000,
+      "tag": "0005_projects",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1748880000000,
+      "tag": "0006_deployment_triggered_by",
+      "breakpoints": true
     }
   ]
 }

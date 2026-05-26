@@ -23,6 +23,19 @@ interface ComposeFile {
   networks?: Record<string, unknown>;
 }
 
+/**
+ * Converts any string to a valid Kubernetes resource name: lowercase, only [a-z0-9-],
+ * no leading/trailing hyphens.
+ * Example: "n8n_data" → "n8n-data", "My_Volume!" → "my-volume"
+ */
+function k8sName(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')  // replace anything not [a-z0-9-] with hyphen
+    .replace(/-{2,}/g, '-')        // collapse multiple hyphens
+    .replace(/^-+|-+$/g, '');      // strip leading/trailing hyphens
+}
+
 export class ComposeService {
   constructor(private k8s: KubernetesService) {}
 
@@ -32,17 +45,58 @@ export class ComposeService {
     return parsed;
   }
 
+  /**
+   * Collecte tous les volumes nommés depuis les deux sources possibles :
+   * - La section top-level `volumes:` (optionnelle dans le spec Compose)
+   * - Les arrays `volumes:` de chaque service (source principale)
+   * Déduplique via un Set. Exclut les bind-mounts (chemins relatifs ou absolus).
+   */
+  private collectNamedVolumes(compose: ComposeFile): Set<string> {
+    const names = new Set<string>();
+    // Top-level volumes section
+    for (const name of Object.keys(compose.volumes ?? {})) {
+      names.add(name);
+    }
+    // Service-level volumes (in case top-level section is absent or incomplete)
+    for (const svc of Object.values(compose.services)) {
+      for (const vol of svc.volumes ?? []) {
+        const [volName] = vol.split(':');
+        if (volName && !volName.startsWith('./') && !volName.startsWith('/')) {
+          names.add(volName);
+        }
+      }
+    }
+    return names;
+  }
+
   // Deploy a compose-type application: one Deployment + Service per service
   async deployCompose(app: DbApplication): Promise<void> {
     const compose = this.parse(app.composeContent!);
 
-    // Create PVCs for named volumes first
-    for (const volumeName of Object.keys(compose.volumes ?? {})) {
-      await this.k8s.applyPVC(app, volumeName, '1Gi');
+    // Create PVCs for ALL named volumes (top-level section + service-level declarations).
+    // Many compose files omit the top-level `volumes:` section and only declare volumes
+    // inside services — those were previously missed, causing "PVC not found" errors.
+    // Sanitize names: Docker Compose allows underscores (e.g. "n8n_data"),
+    // but Kubernetes resource names only allow [a-z0-9-].
+    for (const volumeName of this.collectNamedVolumes(compose)) {
+      await this.k8s.applyPVC(app, k8sName(volumeName), '1Gi');
     }
 
     for (const [serviceName, svc] of Object.entries(compose.services)) {
       await this.deployComposeService(app, serviceName, svc, compose);
+    }
+
+    // Créer un Ingress vers le premier service avec des ports (si domaine configuré)
+    if (app.subdomain && app.domain) {
+      const firstEntry = Object.entries(compose.services).find(
+        ([, svc]) => svc.ports && svc.ports.length > 0,
+      );
+      if (firstEntry) {
+        const [firstSvcName, firstSvc] = firstEntry;
+        const firstPort = this.parsePorts(firstSvc.ports)[0];
+        const backendSvcName = `${app.name}-${firstSvcName}`;
+        await this.k8s.applyIngressForBackend(app, backendSvcName, firstPort);
+      }
     }
   }
 
@@ -99,13 +153,16 @@ export class ComposeService {
     const volumes: k8s.V1Volume[] = [];
 
     for (const vol of svc.volumes ?? []) {
-      // named volume: "pgdata:/var/lib/postgresql/data"
+      // named volume: "pgdata:/var/lib/postgresql/data" or "n8n_data:/home/node/.n8n"
       const [volName, mountPath] = vol.split(':');
       if (volName && mountPath && !volName.startsWith('./') && !volName.startsWith('/')) {
-        volumeMounts.push({ name: volName, mountPath });
+        // Must sanitize: underscores and other chars are invalid in Kubernetes names.
+        // The sanitized name must match exactly what was used in applyPVC above.
+        const safeVolName = k8sName(volName);
+        volumeMounts.push({ name: safeVolName, mountPath });
         volumes.push({
-          name: volName,
-          persistentVolumeClaim: { claimName: `${app.name}-${volName}` },
+          name: safeVolName,
+          persistentVolumeClaim: { claimName: `${app.name}-${safeVolName}` },
         });
       }
     }
@@ -153,7 +210,13 @@ export class ComposeService {
 
     try {
       await appsApi.readNamespacedDeployment(name, ns);
-      await appsApi.replaceNamespacedDeployment(name, ns, deploymentBody);
+      // Patch the deployment spec (safer than replace which needs resourceVersion)
+      await appsApi.patchNamespacedDeployment(
+        name, ns,
+        { spec: deploymentBody.spec },
+        undefined, undefined, undefined, undefined, undefined,
+        { headers: { 'Content-Type': 'application/strategic-merge-patch+json' } },
+      );
     } catch (err: any) {
       if (err?.statusCode === 404 || err?.response?.statusCode === 404) {
         await appsApi.createNamespacedDeployment(ns, deploymentBody);
@@ -164,19 +227,26 @@ export class ComposeService {
 
     // Service
     if (ports.length > 0) {
-      const svcBody: k8s.V1Service = {
-        metadata: { name, namespace: ns },
-        spec: {
-          selector: { 'app.kubernetes.io/name': name },
-          ports: ports.map((p) => ({ port: p, targetPort: p as any, protocol: 'TCP' })),
-          type: 'ClusterIP',
-        },
-      };
+      const svcPorts = ports.map((p) => ({ port: p, targetPort: p as any, protocol: 'TCP' }));
       try {
         await coreApi.readNamespacedService(name, ns);
-        await coreApi.replaceNamespacedService(name, ns, svcBody);
+        // Patch: ne pas remplacer (clusterIP est immutable)
+        await coreApi.patchNamespacedService(
+          name, ns,
+          { spec: { selector: { 'app.kubernetes.io/name': name }, ports: svcPorts } },
+          undefined, undefined, undefined, undefined, undefined,
+          { headers: { 'Content-Type': 'application/strategic-merge-patch+json' } },
+        );
       } catch (err: any) {
         if (err?.statusCode === 404 || err?.response?.statusCode === 404) {
+          const svcBody: k8s.V1Service = {
+            metadata: { name, namespace: ns, labels: { 'app.kubernetes.io/name': name, 'app.kubernetes.io/managed-by': 'appk3s', 'appk3s.io/app-id': app.id } },
+            spec: {
+              selector: { 'app.kubernetes.io/name': name },
+              ports: svcPorts,
+              type: 'ClusterIP',
+            },
+          };
           await coreApi.createNamespacedService(ns, svcBody);
         } else {
           throw err;
@@ -212,9 +282,11 @@ export class ComposeService {
       ]);
     }
 
-    for (const volName of Object.keys(compose.volumes ?? {})) {
+    // Delete PVCs for ALL named volumes (top-level + service-level).
+    // Also apply k8sName() to match the sanitized name used during creation.
+    for (const volName of this.collectNamedVolumes(compose)) {
       await coreApi
-        .deleteNamespacedPersistentVolumeClaim(`${app.name}-${volName}`, ns)
+        .deleteNamespacedPersistentVolumeClaim(`${app.name}-${k8sName(volName)}`, ns)
         .catch(ignore);
     }
   }

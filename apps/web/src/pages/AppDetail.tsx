@@ -17,18 +17,19 @@ import {
   Minus,
   AlertTriangle,
   ShieldCheck,
-  Save,
+  Lock,
 } from 'lucide-react';
 import { useApp, useAppStatus, useDeployments, useUpdateApp, useDeleteApp } from '../hooks/useApps.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { appsApi } from '../lib/api.js';
+import { appsApi, usersApi, projectsApi } from '../lib/api.js';
 import { StatusBadge } from '../components/StatusBadge.js';
 import { LogsViewer } from '../components/LogsViewer.js';
 import { EnvVarsEditor } from '../components/EnvVarsEditor.js';
 import { formatDate, relativeTime } from '../lib/utils.js';
 import { useAuthStore } from '../store/auth.js';
-import type { EnvVar, Port, SetPermissionInput } from '@appk3s/shared';
-import { TEMPLATES } from '@appk3s/shared';
+import { useAppPermissions } from '../hooks/usePermissions.js';
+import type { EnvVar, Port } from '@appk3s/shared';
+import { TEMPLATES, IMAGE_PORT_MAP } from '@appk3s/shared';
 import toast from 'react-hot-toast';
 
 type Tab = 'overview' | 'config' | 'environment' | 'logs' | 'deployments' | 'access';
@@ -66,30 +67,52 @@ export function AppDetail() {
   const updateMut = useUpdateApp(id!);
   const deleteMut = useDeleteApp();
 
-  // Permissions tab data (admin only)
-  const { data: permUsers = [], refetch: refetchPerms } = useQuery({
-    queryKey: ['app-permissions', id],
-    queryFn: () => appsApi.getPermissions(id!),
+  // Per-app role/capabilities for the current user
+  const perms = useAppPermissions(id!);
+
+  // Project role (needed to restrict domain/ports for 'member' role)
+  const { data: projectRoleData } = useQuery({
+    queryKey: ['projects', app?.projectId, 'my-role'],
+    queryFn: () => projectsApi.getMyRole(app!.projectId!),
+    enabled: !!app?.projectId && !isAdmin,
+  });
+  // Owners and admins can modify domain/ingress/ports; plain members cannot
+  const canSetDomain = isAdmin || !app?.projectId || projectRoleData?.role === 'owner' || perms.role === 'owner' || perms.role === 'editor';
+
+  // Members list for access tab (owner or admin)
+  const { data: members = [], refetch: refetchMembers } = useQuery({
+    queryKey: ['app-members', id],
+    queryFn: () => appsApi.getMembers(id!),
+    enabled: (isAdmin || perms.canManageTeam) && !!id,
+  });
+
+  // Users list for invite dropdown (admin only — admins see all users)
+  const { data: allUsers = [] } = useQuery({
+    queryKey: ['users'],
+    queryFn: () => usersApi.list(),
     enabled: isAdmin && !!id,
   });
 
-  // Local copy of permissions for editing (keyed by userId)
-  const [permEdits, setPermEdits] = useState<Record<string, SetPermissionInput>>({});
+  const [inviteUserId, setInviteUserId] = useState('');
+  const [inviteRole, setInviteRole] = useState<'owner' | 'editor' | 'viewer'>('viewer');
 
-  const savePermMut = useMutation({
-    mutationFn: async () => {
-      await Promise.all(
-        Object.entries(permEdits).map(([userId, data]) =>
-          appsApi.setPermission(id!, userId, data),
-        ),
-      );
-    },
-    onSuccess: () => {
-      toast.success('Droits sauvegardés');
-      setPermEdits({});
-      refetchPerms();
-    },
-    onError: () => toast.error('Échec de la sauvegarde'),
+  const inviteMut = useMutation({
+    mutationFn: () => appsApi.inviteMember(id!, { userId: inviteUserId, role: inviteRole }),
+    onSuccess: () => { toast.success('Membre ajouté'); setInviteUserId(''); refetchMembers(); },
+    onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Erreur'),
+  });
+
+  const updateRoleMut = useMutation({
+    mutationFn: ({ userId, role }: { userId: string; role: string }) =>
+      appsApi.updateMemberRole(id!, userId, role as 'owner' | 'editor' | 'viewer'),
+    onSuccess: () => { toast.success('Rôle mis à jour'); refetchMembers(); },
+    onError: () => toast.error('Erreur de mise à jour'),
+  });
+
+  const removeMemberMut = useMutation({
+    mutationFn: (userId: string) => appsApi.removeMember(id!, userId),
+    onSuccess: () => { toast.success('Membre retiré'); refetchMembers(); },
+    onError: () => toast.error('Erreur de suppression'),
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['apps', id] });
@@ -147,14 +170,20 @@ export function AppDetail() {
   const accessUrl = status?.accessUrl;
   const nameChanged = configForm?.name !== app.name;
 
-  const tabs: { id: Tab; label: string; adminOnly?: boolean }[] = [
+  const tabs: { id: Tab; label: string; adminOnly?: boolean; ownerOnly?: boolean }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'config', label: 'Configuration' },
     { id: 'environment', label: 'Env Vars' },
     { id: 'logs', label: 'Logs' },
     { id: 'deployments', label: 'Déploiements' },
-    { id: 'access', label: 'Accès', adminOnly: true },
+    { id: 'access', label: 'Équipe', adminOnly: false, ownerOnly: true },
   ];
+
+  const visibleTabs = tabs.filter((t) => {
+    if (t.adminOnly && !isAdmin) return false;
+    if (t.ownerOnly && !isAdmin && !perms.canManageTeam) return false;
+    return true;
+  });
 
   const handleDelete = async () => {
     if (!confirmDel) { setConfirmDel(true); setTimeout(() => setConfirmDel(false), 3000); return; }
@@ -241,36 +270,44 @@ export function AppDetail() {
           </div>
         </div>
 
-        {/* Actions */}
+        {/* Actions — gated by per-app capabilities */}
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            className="btn-primary py-2"
-            onClick={() => deployMut.mutate()}
-            disabled={app.status === 'deploying' || deployMut.isPending}
-          >
-            <Rocket className="w-4 h-4" />
-            Deploy
-          </button>
-          {app.status === 'stopped' || app.status === 'idle' ? (
-            <button className="btn-ghost py-2" onClick={() => startMut.mutate()} disabled={startMut.isPending}>
-              <Play className="w-4 h-4 text-emerald-400" /> Start
-            </button>
-          ) : (
-            <button className="btn-ghost py-2" onClick={() => stopMut.mutate()} disabled={app.status !== 'running' || stopMut.isPending}>
-              <Square className="w-4 h-4 text-yellow-400" /> Stop
+          {perms.canDeploy && (
+            <button
+              className="btn-primary py-2"
+              onClick={() => deployMut.mutate()}
+              disabled={app.status === 'deploying' || deployMut.isPending}
+            >
+              <Rocket className="w-4 h-4" />
+              Deploy
             </button>
           )}
-          <button className="btn-ghost py-2" onClick={() => restartMut.mutate()} disabled={app.status !== 'running' || restartMut.isPending}>
-            <RotateCcw className="w-4 h-4" /> Restart
-          </button>
-          <button
-            className={confirmDel ? 'btn-danger' : 'btn-ghost py-2'}
-            onClick={handleDelete}
-            disabled={deleteMut.isPending}
-          >
-            <Trash2 className="w-4 h-4" />
-            {confirmDel ? 'Confirmer?' : ''}
-          </button>
+          {perms.canDeploy && (
+            app.status === 'stopped' || app.status === 'idle' ? (
+              <button className="btn-ghost py-2" onClick={() => startMut.mutate()} disabled={startMut.isPending}>
+                <Play className="w-4 h-4 text-emerald-400" /> Start
+              </button>
+            ) : (
+              <button className="btn-ghost py-2" onClick={() => stopMut.mutate()} disabled={app.status !== 'running' || stopMut.isPending}>
+                <Square className="w-4 h-4 text-yellow-400" /> Stop
+              </button>
+            )
+          )}
+          {perms.canDeploy && (
+            <button className="btn-ghost py-2" onClick={() => restartMut.mutate()} disabled={app.status !== 'running' || restartMut.isPending}>
+              <RotateCcw className="w-4 h-4" /> Restart
+            </button>
+          )}
+          {perms.canDelete && (
+            <button
+              className={confirmDel ? 'btn-danger' : 'btn-ghost py-2'}
+              onClick={handleDelete}
+              disabled={deleteMut.isPending}
+            >
+              <Trash2 className="w-4 h-4" />
+              {confirmDel ? 'Confirmer?' : ''}
+            </button>
+          )}
         </div>
       </div>
 
@@ -356,7 +393,7 @@ export function AppDetail() {
       {/* Tabs */}
       <div className="border-b border-slate-700/50 mb-6">
         <nav className="flex gap-1">
-          {tabs.filter((t) => !t.adminOnly || isAdmin).map((t) => (
+          {visibleTabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
@@ -479,6 +516,11 @@ export function AppDetail() {
                       );
                       if (match && match.defaults.ports.length > 0) {
                         setConfigForm((f) => f ? { ...f, ports: [...match.defaults.ports] } : f);
+                        return;
+                      }
+                      const port = IMAGE_PORT_MAP[imageBase] ?? IMAGE_PORT_MAP[configForm.image];
+                      if (port) {
+                        setConfigForm((f) => f ? { ...f, ports: [{ containerPort: port, protocol: 'TCP' }] } : f);
                       }
                     }}
                   />
@@ -506,60 +548,67 @@ export function AppDetail() {
           </div>
 
           {/* Domain */}
-          <div className="card p-5 space-y-4">
-            <h2 className="text-sm font-semibold text-white">Domaine & Ingress</h2>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label">Sous-domaine</label>
-                <input
-                  className="input"
-                  placeholder={app.name}
-                  value={configForm.subdomain}
-                  onChange={(e) => setConfigForm((f) => f ? { ...f, subdomain: e.target.value } : f)}
-                />
+          {canSetDomain ? (
+            <div className="card p-5 space-y-4">
+              <h2 className="text-sm font-semibold text-white">Domaine & Ingress</h2>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="label">Sous-domaine</label>
+                  <input
+                    className="input"
+                    placeholder={app.name}
+                    value={configForm.subdomain}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, subdomain: e.target.value } : f)}
+                  />
+                </div>
+                <div>
+                  <label className="label">Domaine wildcard</label>
+                  <input
+                    className="input"
+                    placeholder="example.com"
+                    value={configForm.domain}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, domain: e.target.value } : f)}
+                  />
+                </div>
               </div>
-              <div>
-                <label className="label">Domaine wildcard</label>
-                <input
-                  className="input"
-                  placeholder="example.com"
-                  value={configForm.domain}
-                  onChange={(e) => setConfigForm((f) => f ? { ...f, domain: e.target.value } : f)}
-                />
+              {configForm.subdomain && configForm.domain && (
+                <p className="text-xs text-accent">
+                  → URL : {configForm.tlsEnabled ? 'https' : 'http'}://{configForm.subdomain}.{configForm.domain}
+                </p>
+              )}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="label">Ingress Class</label>
+                  <select
+                    className="input"
+                    value={configForm.ingressClass}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, ingressClass: e.target.value } : f)}
+                  >
+                    <option value="traefik">Traefik (k3s default)</option>
+                    <option value="nginx">nginx</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-3 pt-6">
+                  <input
+                    type="checkbox"
+                    id="tls-edit"
+                    checked={configForm.tlsEnabled}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, tlsEnabled: e.target.checked } : f)}
+                    className="w-4 h-4 rounded accent-accent"
+                  />
+                  <label htmlFor="tls-edit" className="text-sm text-slate-300">Activer TLS (HTTPS)</label>
+                </div>
               </div>
             </div>
-            {configForm.subdomain && configForm.domain && (
-              <p className="text-xs text-accent">
-                → URL : {configForm.tlsEnabled ? 'https' : 'http'}://{configForm.subdomain}.{configForm.domain}
-              </p>
-            )}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label">Ingress Class</label>
-                <select
-                  className="input"
-                  value={configForm.ingressClass}
-                  onChange={(e) => setConfigForm((f) => f ? { ...f, ingressClass: e.target.value } : f)}
-                >
-                  <option value="traefik">Traefik (k3s default)</option>
-                  <option value="nginx">nginx</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-3 pt-6">
-                <input
-                  type="checkbox"
-                  id="tls-edit"
-                  checked={configForm.tlsEnabled}
-                  onChange={(e) => setConfigForm((f) => f ? { ...f, tlsEnabled: e.target.checked } : f)}
-                  className="w-4 h-4 rounded accent-accent"
-                />
-                <label htmlFor="tls-edit" className="text-sm text-slate-300">Activer TLS (HTTPS)</label>
-              </div>
+          ) : (
+            <div className="card p-4 flex items-center gap-3 text-slate-500 text-sm">
+              <Lock className="w-4 h-4 shrink-0 text-slate-600" />
+              <span>Domaine, Ingress et TLS — réservés aux Admin Projet et Admin Général.</span>
             </div>
-          </div>
+          )}
 
           {/* Ports */}
-          {app.type === 'docker-image' && (
+          {app.type === 'docker-image' && canSetDomain && (
             <div className="card p-5 space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-white">Ports exposés</h2>
@@ -695,107 +744,161 @@ export function AppDetail() {
         </div>
       )}
 
-      {/* ── Accès ────────────────────────────────────────────────────────────── */}
-      {tab === 'access' && isAdmin && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-semibold text-white">Droits d'accès par utilisateur</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Les admins ont toujours accès complet. Configurez ici les droits des autres rôles.
-              </p>
-            </div>
-            {Object.keys(permEdits).length > 0 && (
-              <button
-                className="btn-primary py-1.5 text-sm"
-                onClick={() => savePermMut.mutate()}
-                disabled={savePermMut.isPending}
-              >
-                <Save className="w-3.5 h-3.5" />
-                {savePermMut.isPending ? 'Sauvegarde...' : 'Sauvegarder les droits'}
-              </button>
-            )}
+      {/* ── Équipe / Accès ───────────────────────────────────────────────────── */}
+      {tab === 'access' && (isAdmin || perms.canManageTeam) && (
+        <div className="space-y-5">
+          {/* Header */}
+          <div>
+            <h3 className="text-sm font-semibold text-white">Équipe & Permissions</h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Les administrateurs globaux ont toujours un accès complet.
+            </p>
           </div>
 
-          {permUsers.length === 0 ? (
-            <div className="card p-6 text-center text-slate-500 text-sm">
-              Aucun autre utilisateur. Créez des utilisateurs dans les Paramètres.
-            </div>
-          ) : (
-            <div className="card overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-700/40">
-                    <th className="px-4 py-3 text-left text-xs text-slate-500 font-medium">Utilisateur</th>
-                    <th className="px-4 py-3 text-center text-xs text-slate-500 font-medium">Voir</th>
-                    <th className="px-4 py-3 text-center text-xs text-slate-500 font-medium">Déployer</th>
-                    <th className="px-4 py-3 text-center text-xs text-slate-500 font-medium">Modifier</th>
-                    <th className="px-4 py-3 text-center text-xs text-slate-500 font-medium">Supprimer</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {permUsers.map((u: any) => {
-                    // Valeurs en cours d'édition ou valeurs serveur
-                    const cur: SetPermissionInput = permEdits[u.userId] ?? {
-                      canView:   u.canView,
-                      canDeploy: u.canDeploy,
-                      canEdit:   u.canEdit,
-                      canDelete: u.canDelete,
-                    };
-                    const isDirty = !!permEdits[u.userId];
-
-                    const setPerm = (field: keyof SetPermissionInput, val: boolean) => {
-                      setPermEdits((prev) => ({
-                        ...prev,
-                        [u.userId]: { ...cur, [field]: val },
-                      }));
-                    };
-
-                    return (
-                      <tr
-                        key={u.userId}
-                        className={`border-b border-slate-700/20 last:border-0 transition-colors ${
-                          isDirty ? 'bg-accent/5' : 'hover:bg-surface-200/30'
-                        }`}
-                      >
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-semibold text-slate-300 shrink-0">
-                              {u.email[0].toUpperCase()}
-                            </div>
-                            <div>
-                              <p className="text-sm text-white">{u.email}</p>
-                              <p className="text-xs text-slate-500">{u.role}</p>
-                            </div>
-                            {isDirty && (
-                              <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-accent/20 text-accent">modifié</span>
-                            )}
-                          </div>
-                        </td>
-                        {(['canView', 'canDeploy', 'canEdit', 'canDelete'] as const).map((field) => (
-                          <td key={field} className="px-4 py-3 text-center">
-                            <input
-                              type="checkbox"
-                              checked={cur[field]}
-                              onChange={(e) => setPerm(field, e.target.checked)}
-                              className="w-4 h-4 rounded accent-accent cursor-pointer"
-                            />
-                          </td>
-                        ))}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          {/* Invite form (admin only — only admins can see all users) */}
+          {isAdmin && (
+            <div className="card p-4 space-y-3">
+              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Inviter un utilisateur</h4>
+              <div className="flex gap-3 items-end">
+                <div className="flex-1">
+                  <label className="label">Utilisateur</label>
+                  <select
+                    className="input"
+                    value={inviteUserId}
+                    onChange={(e) => setInviteUserId(e.target.value)}
+                  >
+                    <option value="">Sélectionner...</option>
+                    {(allUsers as any[])
+                      .filter((u: any) => u.role !== 'admin' && !members.some((m: any) => m.userId === u.id && m.appRole !== null))
+                      .map((u: any) => (
+                        <option key={u.id} value={u.id}>{u.email}</option>
+                      ))
+                    }
+                  </select>
+                </div>
+                <div className="w-40">
+                  <label className="label">Rôle</label>
+                  <select
+                    className="input"
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value as 'owner' | 'editor' | 'viewer')}
+                  >
+                    <option value="owner">Propriétaire</option>
+                    <option value="editor">Éditeur</option>
+                    <option value="viewer">Lecteur</option>
+                  </select>
+                </div>
+                <button
+                  className="btn-primary py-2"
+                  onClick={() => inviteMut.mutate()}
+                  disabled={!inviteUserId || inviteMut.isPending}
+                >
+                  Inviter
+                </button>
+              </div>
             </div>
           )}
 
-          <p className="text-xs text-slate-600">
-            💡 <strong className="text-slate-500">Voir</strong> = accès lecture (liste, logs, status) ·{' '}
-            <strong className="text-slate-500">Déployer</strong> = deploy / start / stop / restart ·{' '}
-            <strong className="text-slate-500">Modifier</strong> = config & env vars ·{' '}
-            <strong className="text-slate-500">Supprimer</strong> = suppression de l'app
-          </p>
+          {/* Members table — shows project members + explicit per-app permissions */}
+          {(() => {
+            const PROJECT_ROLE_LABEL: Record<string, string> = {
+              owner: '🔑 Admin Projet', member: '👤 Utilisateur', viewer: '👁 Lecteur',
+            };
+            const visibleMembers = (members as any[]).filter(
+              (m: any) => m.appRole !== null || m.projectRole !== null,
+            );
+            return (
+              <div className="card overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-700/40">
+                  <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                    Accès effectifs ({visibleMembers.length})
+                  </h4>
+                </div>
+                {visibleMembers.length === 0 ? (
+                  <div className="p-6 text-center text-slate-500 text-sm">
+                    {isAdmin
+                      ? 'Aucun accès défini. Invitez des utilisateurs ci-dessus ou via le projet.'
+                      : 'Aucun membre à afficher.'}
+                  </div>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700/40 bg-surface-200/20">
+                        <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Utilisateur</th>
+                        <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Accès projet</th>
+                        <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Accès direct</th>
+                        <th className="px-4 py-2.5 text-right text-xs font-medium text-slate-500">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleMembers.map((m: any) => (
+                        <tr key={m.userId} className="border-b border-slate-700/20 last:border-0 hover:bg-surface-200/30">
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-semibold text-slate-300">
+                                {(m.email as string)[0].toUpperCase()}
+                              </div>
+                              <p className="text-white text-sm">{m.email}</p>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-xs">
+                            {m.projectRole ? (
+                              <span className="text-slate-300">{PROJECT_ROLE_LABEL[m.projectRole] ?? m.projectRole}</span>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {m.appRole ? (
+                              <select
+                                className="input py-1 text-xs w-36"
+                                value={m.appRole}
+                                onChange={(e) => updateRoleMut.mutate({ userId: m.userId, role: e.target.value })}
+                                disabled={updateRoleMut.isPending}
+                              >
+                                <option value="owner">Propriétaire</option>
+                                <option value="editor">Éditeur</option>
+                                <option value="viewer">Lecteur</option>
+                              </select>
+                            ) : (
+                              <span className="text-xs text-slate-600">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {m.appRole && (
+                              <button
+                                className="btn-danger py-1 px-3 text-xs"
+                                onClick={() => removeMemberMut.mutate(m.userId)}
+                                disabled={removeMemberMut.isPending}
+                              >
+                                Retirer
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Role legend */}
+          <div className="grid grid-cols-3 gap-3 text-xs text-slate-400">
+            <div className="card p-3 space-y-1">
+              <p className="font-semibold text-white">Propriétaire</p>
+              <p>Voir · Déployer · Modifier · Supprimer · Gérer l'équipe</p>
+            </div>
+            <div className="card p-3 space-y-1">
+              <p className="font-semibold text-white">Éditeur</p>
+              <p>Voir · Déployer · Modifier la config et les env vars</p>
+            </div>
+            <div className="card p-3 space-y-1">
+              <p className="font-semibold text-white">Lecteur</p>
+              <p>Voir les détails, les logs et le statut uniquement</p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -808,7 +911,7 @@ export function AppDetail() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-700/40">
-                  {['ID', 'Statut', 'Démarré', 'Terminé'].map((h) => (
+                  {['ID', 'Statut', 'Lancé par', 'Démarré', 'Terminé'].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs text-slate-500 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -818,6 +921,11 @@ export function AppDetail() {
                   <tr key={d.id} className="border-b border-slate-700/20 last:border-0 hover:bg-surface-200/30">
                     <td className="px-4 py-3 font-mono text-xs text-slate-400">{d.id.slice(0, 8)}</td>
                     <td className="px-4 py-3"><StatusBadge status={d.status} size="sm" /></td>
+                    <td className="px-4 py-3 text-xs text-slate-400">
+                      {(d as any).triggeredByEmail ? (
+                        <span className="text-slate-300">{(d as any).triggeredByEmail}</span>
+                      ) : '—'}
+                    </td>
                     <td className="px-4 py-3 text-xs text-slate-400">{formatDate(d.createdAt)}</td>
                     <td className="px-4 py-3 text-xs text-slate-400">
                       {d.completedAt ? formatDate(d.completedAt) : '—'}

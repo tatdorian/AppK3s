@@ -66,6 +66,13 @@ export async function authRoutes(app: FastifyInstance) {
     return reply.code(201).send({ token, user });
   });
 
+  // GET /api/auth/setup-status — public, no auth required
+  // Returns true if no user exists yet (first-run wizard needed)
+  app.get('/setup-status', async () => {
+    const [{ userCount }] = await db.select({ userCount: count() }).from(schema.users);
+    return { setupRequired: userCount === 0 };
+  });
+
   // GET /api/auth/me
   app.get('/me', { preHandler: app.authenticate }, async (request) => {
     const user = await db.query.users.findFirst({

@@ -24,6 +24,7 @@ export const createAppSchema = z.object({
     .max(63)
     .regex(/^[a-z0-9-]+$/, 'Lowercase letters, numbers and hyphens only'),
   namespace: z.string().default('default'),
+  projectId: z.string().uuid().optional(), // null → assigned to Default project
   type: z.enum(['docker-image', 'compose']),
   templateId: z.string().optional(),
   image: z.string().optional(),
@@ -44,14 +45,46 @@ export const createAppSchema = z.object({
 // type is immutable after creation; name is editable (triggers k8s resource rename)
 export const updateAppSchema = createAppSchema.partial().omit({ type: true });
 
-export const setPermissionSchema = z.object({
-  canView:   z.boolean().default(true),
-  canDeploy: z.boolean().default(false),
-  canEdit:   z.boolean().default(false),
-  canDelete: z.boolean().default(false),
+// ── App-level roles ───────────────────────────────────────────────────────────
+export const appRoleSchema = z.enum(['owner', 'editor', 'viewer']);
+
+export const inviteMemberSchema = z.object({
+  userId: z.string().uuid(),
+  role: appRoleSchema.default('viewer'),
 });
 
-export type SetPermissionInput = z.infer<typeof setPermissionSchema>;
+export const updateMemberRoleSchema = z.object({
+  role: appRoleSchema,
+});
+
+export type InviteMemberInput = z.infer<typeof inviteMemberSchema>;
+export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>;
+
+// ── Project-level schemas ─────────────────────────────────────────────────────
+export const projectRoleSchema = z.enum(['owner', 'member', 'viewer']);
+
+export const createProjectSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().optional(),
+});
+
+export const updateProjectSchema = createProjectSchema.partial();
+
+export const inviteProjectMemberSchema = z.object({
+  userId: z.string().uuid(),
+  role: projectRoleSchema.default('viewer'),
+});
+
+export const updateProjectMemberRoleSchema = z.object({
+  role: projectRoleSchema,
+});
+
+// ProjectRole is defined in types.ts — re-use it here via z.infer (same shape)
+// export type ProjectRole = z.infer<typeof projectRoleSchema>; // removed: duplicate
+export type CreateProjectInput = z.infer<typeof createProjectSchema>;
+export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
+export type InviteProjectMemberInput = z.infer<typeof inviteProjectMemberSchema>;
+export type UpdateProjectMemberRoleInput = z.infer<typeof updateProjectMemberRoleSchema>;
 
 export const loginSchema = z.object({
   email: z.string().email(),

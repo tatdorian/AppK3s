@@ -4,12 +4,12 @@ import type {
   Deployment,
   User,
   AppStatusInfo,
-  AppPermission,
+  AppMember,
+  AppMyRole,
   NodeInfo,
   ClusterSettings,
   CreateAppInput,
   UpdateAppInput,
-  SetPermissionInput,
   LoginInput,
   RegisterInput,
 } from '@appk3s/shared';
@@ -48,6 +48,9 @@ export const authApi = {
     http.post<{ token: string; user: User }>('/api/auth/register', data).then((r) => r.data),
 
   me: () => http.get<User>('/api/auth/me').then((r) => r.data),
+
+  setupStatus: () =>
+    http.get<{ setupRequired: boolean }>('/api/auth/setup-status').then((r) => r.data),
 };
 
 // ─── Applications ────────────────────────────────────────────────────────────
@@ -81,15 +84,22 @@ export const appsApi = {
   deployments: (id: string) =>
     http.get<Deployment[]>(`/api/apps/${id}/deployments`).then((r) => r.data),
 
-  // Droits d'accès (admin only)
-  getPermissions: (id: string) =>
-    http.get<AppPermission[]>(`/api/apps/${id}/permissions`).then((r) => r.data),
+  // Rôle de l'utilisateur courant sur cette app
+  getMyRole: (id: string) =>
+    http.get<AppMyRole>(`/api/apps/${id}/my-role`).then((r) => r.data),
 
-  setPermission: (id: string, userId: string, data: SetPermissionInput) =>
-    http.put<AppPermission>(`/api/apps/${id}/permissions/${userId}`, data).then((r) => r.data),
+  // Gestion de l'équipe (admin ou owner)
+  getMembers: (id: string) =>
+    http.get<AppMember[]>(`/api/apps/${id}/members`).then((r) => r.data),
 
-  deletePermission: (id: string, userId: string) =>
-    http.delete(`/api/apps/${id}/permissions/${userId}`),
+  inviteMember: (id: string, data: { userId: string; role: 'owner' | 'editor' | 'viewer' }) =>
+    http.post(`/api/apps/${id}/members`, data).then((r) => r.data),
+
+  updateMemberRole: (id: string, userId: string, role: 'owner' | 'editor' | 'viewer') =>
+    http.patch(`/api/apps/${id}/members/${userId}`, { role }).then((r) => r.data),
+
+  removeMember: (id: string, userId: string) =>
+    http.delete(`/api/apps/${id}/members/${userId}`),
 };
 
 // ─── Nodes ───────────────────────────────────────────────────────────────────
@@ -114,6 +124,43 @@ export const settingsApi = {
 
 export const templatesApi = {
   list: () => http.get<import('@appk3s/shared').AppTemplate[]>('/api/templates').then((r) => r.data),
+};
+
+// ─── Projects ────────────────────────────────────────────────────────────────
+
+export const projectsApi = {
+  list: () => http.get<import('@appk3s/shared').Project[]>('/api/projects').then((r) => r.data),
+
+  get: (id: string) => http.get<import('@appk3s/shared').Project & { apps: any[] }>(`/api/projects/${id}`).then((r) => r.data),
+
+  create: (data: { name: string; description?: string }) =>
+    http.post<import('@appk3s/shared').Project>('/api/projects', data).then((r) => r.data),
+
+  update: (id: string, data: { name?: string; description?: string }) =>
+    http.patch<import('@appk3s/shared').Project>(`/api/projects/${id}`, data).then((r) => r.data),
+
+  delete: (id: string) => http.delete(`/api/projects/${id}`),
+
+  getMembers: (id: string) => http.get<any[]>(`/api/projects/${id}/members`).then((r) => r.data),
+
+  inviteMember: (id: string, data: { userId: string; role: string }) =>
+    http.post(`/api/projects/${id}/members`, data).then((r) => r.data),
+
+  updateMemberRole: (id: string, userId: string, role: string) =>
+    http.patch(`/api/projects/${id}/members/${userId}`, { role }).then((r) => r.data),
+
+  removeMember: (id: string, userId: string) =>
+    http.delete(`/api/projects/${id}/members/${userId}`),
+
+  getMyRole: (id: string) =>
+    http.get<{ role: 'owner' | 'member' | 'viewer' | null; isAdmin: boolean }>(`/api/projects/${id}/my-role`).then((r) => r.data),
+
+  /** Crée un nouveau compte utilisateur et l'ajoute directement au projet */
+  createUser: (projectId: string, data: { email: string; password: string; projectRole: string }) =>
+    http.post<{ user: { id: string; email: string; role: string }; membership: unknown }>(
+      `/api/projects/${projectId}/users`,
+      data,
+    ).then((r) => r.data),
 };
 
 // ─── Users ────────────────────────────────────────────────────────────────────

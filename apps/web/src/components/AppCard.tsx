@@ -9,7 +9,7 @@ import toast from 'react-hot-toast';
 
 interface Props {
   app: Application;
-  onDelete: (id: string) => void;
+  onDelete?: (id: string) => void;
 }
 
 export function AppCard({ app, onDelete }: Props) {
@@ -119,13 +119,15 @@ export function AppCard({ app, onDelete }: Props) {
               <Square className="w-3.5 h-3.5 text-yellow-400" />
             </button>
           )}
-          <button
-            className="btn-ghost p-1.5"
-            title="Delete"
-            onClick={() => onDelete(app.id)}
-          >
-            <Trash2 className="w-3.5 h-3.5 text-red-400" />
-          </button>
+          {onDelete && (
+            <button
+              className="btn-ghost p-1.5"
+              title="Delete"
+              onClick={() => onDelete(app.id)}
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+            </button>
+          )}
         </div>
       </div>
     </div>

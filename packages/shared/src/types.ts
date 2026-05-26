@@ -47,6 +47,7 @@ export interface Application {
   replicas: number;
   cpuLimit?: string;
   memoryLimit?: string;
+  projectId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -54,6 +55,8 @@ export interface Application {
 export interface Deployment {
   id: string;
   applicationId: string;
+  triggeredById?: string | null;
+  triggeredByEmail?: string | null;
   status: DeploymentStatus;
   logs: string;
   error?: string;
@@ -128,17 +131,52 @@ export interface ClusterSettings {
   ovhConsumerKey: string;
 }
 
+export type AppRole = 'owner' | 'editor' | 'viewer';
+
+export interface AppMember {
+  userId: string;
+  email: string;
+  globalRole: string;            // 'admin' | 'viewer'
+  appRole: AppRole | null;       // explicit per-app permission
+  projectRole: ProjectRole | null; // access via project membership
+  createdAt: string | null;
+}
+
+export interface AppMyRole {
+  role: AppRole | null;    // null = not a member
+  isAdmin: boolean;
+}
+
 export interface AppPermission {
   id: string;
   appId: string;
   userId: string;
-  canView: boolean;
-  canDeploy: boolean;
-  canEdit: boolean;
-  canDelete: boolean;
+  role: AppRole;
   createdAt: string;
-  /** Populated when fetching app permissions list */
-  user?: Pick<User, 'id' | 'email' | 'role'>;
+}
+
+// ── Projects ─────────────────────────────────────────────────────────────────
+
+export type ProjectRole = 'owner' | 'member' | 'viewer';
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  appCount?: number;
+  myRole?: ProjectRole | null;
+}
+
+export interface ProjectMember {
+  id: string;
+  projectId: string;
+  userId: string;
+  email: string;
+  globalRole: string;
+  role: ProjectRole;
+  createdAt: string;
 }
 
 export interface PaginatedResponse<T> {

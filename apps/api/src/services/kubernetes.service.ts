@@ -39,7 +39,7 @@ export class KubernetesService {
 
   // ─── Labels helpers ──────────────────────────────────────────────────────────
 
-  private labels(app: DbApplication) {
+  protected labels(app: DbApplication) {
     return {
       'app.kubernetes.io/name': app.name,
       'app.kubernetes.io/managed-by': MANAGED_BY,
@@ -241,7 +241,7 @@ export class KubernetesService {
    * que cert-manager ait terminé la validation HTTP-01.
    * Timeout : 3 minutes (Let's Encrypt HTTP-01 prend 30-90s en général).
    */
-  private async ensureCertificate(
+  protected async ensureCertificate(
     host: string,
     secretName: string,
     namespace: string,
@@ -364,6 +364,79 @@ export class KubernetesService {
                     service: {
                       name: app.name,
                       port: { number: servicePort },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+
+    await this.upsert(
+      () => this.networkingApi.readNamespacedIngress(name, app.namespace),
+      () => this.networkingApi.createNamespacedIngress(app.namespace, body),
+      () => this.networkingApi.replaceNamespacedIngress(name, app.namespace, body),
+    );
+  }
+
+  /**
+   * Variante de applyIngress pour les compose apps :
+   * le backend service peut être différent de app.name.
+   */
+  async applyIngressForBackend(
+    app: DbApplication,
+    backendServiceName: string,
+    backendServicePort: number,
+  ): Promise<void> {
+    if (!app.subdomain || !app.domain) return;
+
+    const name = `${app.name}-ingress`;
+    const host = `${app.subdomain}.${app.domain}`;
+    const labels = this.labels(app);
+    const ingressClass = app.ingressClass || 'traefik';
+
+    const annotations: Record<string, string> = {};
+    const certSecretName = `${app.name}-tls`;
+
+    if (app.tlsEnabled) {
+      await this.ensureCertificate(host, certSecretName, app.namespace);
+      if (ingressClass === 'nginx') {
+        annotations['nginx.ingress.kubernetes.io/ssl-redirect'] = 'true';
+      } else {
+        annotations['traefik.ingress.kubernetes.io/router.entrypoints'] = 'web,websecure';
+        annotations['traefik.ingress.kubernetes.io/router.middlewares'] = 'default-redirect-https@kubernetescrd';
+      }
+    } else {
+      if (ingressClass !== 'nginx') {
+        annotations['traefik.ingress.kubernetes.io/router.entrypoints'] = 'web';
+      }
+    }
+
+    const tls: k8s.V1IngressTLS[] | undefined = app.tlsEnabled
+      ? [{ hosts: [host], secretName: certSecretName }]
+      : undefined;
+
+    const body: k8s.V1Ingress = {
+      apiVersion: 'networking.k8s.io/v1',
+      kind: 'Ingress',
+      metadata: { name, namespace: app.namespace, labels, annotations },
+      spec: {
+        ingressClassName: ingressClass,
+        ...(tls ? { tls } : {}),
+        rules: [
+          {
+            host,
+            http: {
+              paths: [
+                {
+                  path: '/',
+                  pathType: 'Prefix',
+                  backend: {
+                    service: {
+                      name: backendServiceName,
+                      port: { number: backendServicePort },
                     },
                   },
                 },

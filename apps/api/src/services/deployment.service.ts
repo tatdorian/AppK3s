@@ -11,11 +11,11 @@ export class DeploymentService {
     this.compose = new ComposeService(k8s);
   }
 
-  async deploy(app: DbApplication): Promise<DbDeployment> {
+  async deploy(app: DbApplication, triggeredById?: string): Promise<DbDeployment> {
     // Create deployment record
     const [deployment] = await db
       .insert(schema.deployments)
-      .values({ applicationId: app.id, status: 'running' })
+      .values({ applicationId: app.id, status: 'running', triggeredById })
       .returning();
 
     // Mark app as deploying
