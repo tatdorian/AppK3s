@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ChevronLeft,
   Play,
@@ -18,10 +18,14 @@ import {
   AlertTriangle,
   ShieldCheck,
   Lock,
+  Terminal,
+  Database,
 } from 'lucide-react';
 import { useApp, useAppStatus, useDeployments, useUpdateApp, useDeleteApp } from '../hooks/useApps.js';
+import { CredentialsPanel } from '../components/CredentialsPanel.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { appsApi, usersApi, projectsApi } from '../lib/api.js';
+import { appsApi, usersApi, projectsApi, terminalApi, backupsApi } from '../lib/api.js';
+import { WebTerminal } from '../components/WebTerminal.js';
 import { StatusBadge } from '../components/StatusBadge.js';
 import { LogsViewer } from '../components/LogsViewer.js';
 import { EnvVarsEditor } from '../components/EnvVarsEditor.js';
@@ -32,7 +36,7 @@ import type { EnvVar, Port } from '@appk3s/shared';
 import { TEMPLATES, IMAGE_PORT_MAP } from '@appk3s/shared';
 import toast from 'react-hot-toast';
 
-type Tab = 'overview' | 'config' | 'environment' | 'logs' | 'deployments' | 'access';
+type Tab = 'overview' | 'config' | 'environment' | 'logs' | 'deployments' | 'access' | 'terminal' | 'backups';
 
 interface ConfigForm {
   name: string;
@@ -54,9 +58,289 @@ interface ConfigForm {
   memoryLimit: string;
 }
 
+// ─── Terminal Tab ─────────────────────────────────────────────────────────────
+function TerminalTab({ appId }: { appId: string }) {
+  const [selectedPod, setSelectedPod] = useState<string | null>(null);
+
+  const { data: pods = [], isLoading } = useQuery({
+    queryKey: ['terminal-pods', appId],
+    queryFn: () => terminalApi.listPods(appId),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Loader2 className="w-5 h-5 animate-spin text-slate-500" />
+      </div>
+    );
+  }
+
+  if (pods.length === 0) {
+    return (
+      <div className="card p-8 text-center text-slate-500">
+        <Terminal className="w-8 h-8 mx-auto mb-2 opacity-30" />
+        <p className="text-sm">No running pods found.</p>
+        <p className="text-xs mt-1">Deploy the application first to access the terminal.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {pods.length > 1 && (
+        <div className="flex items-center gap-3">
+          <label className="text-sm text-slate-400">Pod:</label>
+          <select
+            className="input w-auto"
+            value={selectedPod ?? pods[0]}
+            onChange={(e) => setSelectedPod(e.target.value)}
+          >
+            {pods.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div style={{ height: '500px' }}>
+        <WebTerminal
+          appId={appId}
+          pod={selectedPod ?? pods[0]}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── Backups Tab ──────────────────────────────────────────────────────────────
+function BackupsTab({ appId }: { appId: string }) {
+  const qc = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [selectedConfig, setSelectedConfig] = useState<string | null>(null);
+  const [showS3Fields, setShowS3Fields] = useState(false);
+
+  // Form state
+  const [bkName, setBkName] = useState('');
+  const [bkSchedule, setBkSchedule] = useState('0 2 * * *');
+  const [bkDest, setBkDest] = useState<'local' | 's3'>('local');
+  const [bkLocalPath, setBkLocalPath] = useState('');
+  const [bkS3Bucket, setBkS3Bucket] = useState('');
+  const [bkS3Region, setBkS3Region] = useState('');
+  const [bkS3AccessKey, setBkS3AccessKey] = useState('');
+  const [bkS3SecretKey, setBkS3SecretKey] = useState('');
+  const [bkRetention, setBkRetention] = useState('30');
+
+  const { data: configs = [], isLoading } = useQuery({
+    queryKey: ['backup-configs', appId],
+    queryFn: () => backupsApi.list().then((all) => all.filter((c) => c.appId === appId)),
+  });
+
+  const { data: runs = [] } = useQuery({
+    queryKey: ['backup-runs', selectedConfig],
+    queryFn: () => backupsApi.listRuns(selectedConfig!),
+    enabled: !!selectedConfig,
+  });
+
+  const createMut = useMutation({
+    mutationFn: () =>
+      backupsApi.create({
+        appId,
+        name: bkName,
+        schedule: bkSchedule,
+        destination: bkDest,
+        ...(bkDest === 'local' ? { localPath: bkLocalPath || undefined } : {
+          s3Config: {
+            bucket: bkS3Bucket,
+            region: bkS3Region,
+            accessKey: bkS3AccessKey,
+            secretKey: bkS3SecretKey,
+          },
+        }),
+        retentionDays: parseInt(bkRetention, 10),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['backup-configs', appId] });
+      toast.success('Backup configuration created');
+      setShowCreate(false);
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed to create backup config'),
+  });
+
+  const triggerMut = useMutation({
+    mutationFn: (configId: string) => backupsApi.triggerRun(configId),
+    onSuccess: () => toast.success('Backup started'),
+    onError: () => toast.error('Failed to start backup'),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (configId: string) => backupsApi.delete(configId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['backup-configs', appId] }),
+    onError: () => toast.error('Failed to delete config'),
+  });
+
+  const formatBytes = (bytes: number | null) => {
+    if (!bytes) return '—';
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h3 className="text-sm font-semibold text-white">Backup configurations</h3>
+        <button className="btn-primary text-xs py-1.5" onClick={() => setShowCreate(!showCreate)}>
+          <Plus className="w-3.5 h-3.5" /> Configure backup
+        </button>
+      </div>
+
+      {showCreate && (
+        <div className="card p-5 space-y-4">
+          <h4 className="text-sm font-semibold text-white">New backup configuration</h4>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Name</label>
+              <input className="input" value={bkName} onChange={(e) => setBkName(e.target.value)} placeholder="Daily backup" />
+            </div>
+            <div>
+              <label className="label">Cron schedule</label>
+              <input className="input font-mono" value={bkSchedule} onChange={(e) => setBkSchedule(e.target.value)} placeholder="0 2 * * *" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Destination</label>
+              <select className="input" value={bkDest} onChange={(e) => { setBkDest(e.target.value as 'local' | 's3'); }}>
+                <option value="local">Local filesystem</option>
+                <option value="s3">S3 / Object storage</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Retention (days)</label>
+              <input className="input" type="number" value={bkRetention} onChange={(e) => setBkRetention(e.target.value)} min="1" />
+            </div>
+          </div>
+          {bkDest === 'local' && (
+            <div>
+              <label className="label">Local path (optional)</label>
+              <input className="input" value={bkLocalPath} onChange={(e) => setBkLocalPath(e.target.value)} placeholder="/backups/myapp" />
+            </div>
+          )}
+          {bkDest === 's3' && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Bucket</label>
+                  <input className="input" value={bkS3Bucket} onChange={(e) => setBkS3Bucket(e.target.value)} placeholder="my-backups" />
+                </div>
+                <div>
+                  <label className="label">Region</label>
+                  <input className="input" value={bkS3Region} onChange={(e) => setBkS3Region(e.target.value)} placeholder="us-east-1" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Access Key</label>
+                  <input className="input font-mono" value={bkS3AccessKey} onChange={(e) => setBkS3AccessKey(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Secret Key</label>
+                  <input className="input font-mono" type="password" value={bkS3SecretKey} onChange={(e) => setBkS3SecretKey(e.target.value)} />
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <button className="btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button>
+            <button className="btn-primary" disabled={!bkName || createMut.isPending} onClick={() => createMut.mutate()}>
+              {createMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-slate-500" /></div>
+      ) : configs.length === 0 ? (
+        <div className="card p-8 text-center text-slate-500">
+          <Database className="w-8 h-8 mx-auto mb-2 opacity-30" />
+          <p className="text-sm">No backup configurations yet.</p>
+        </div>
+      ) : (
+        configs.map((cfg) => (
+          <div key={cfg.id} className="card overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-700/40 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-white">{cfg.name}</p>
+                <p className="text-xs text-slate-500 font-mono">{cfg.schedule} · {cfg.destination}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="btn-ghost text-xs py-1"
+                  onClick={() => setSelectedConfig(selectedConfig === cfg.id ? null : cfg.id)}
+                >
+                  {selectedConfig === cfg.id ? 'Hide runs' : 'View runs'}
+                </button>
+                <button
+                  className="btn-primary text-xs py-1"
+                  onClick={() => triggerMut.mutate(cfg.id)}
+                  disabled={triggerMut.isPending}
+                >
+                  {triggerMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  Run now
+                </button>
+                <button
+                  className="btn-ghost p-1.5 text-slate-400 hover:text-red-400"
+                  onClick={() => { if (confirm('Delete this backup config?')) deleteMut.mutate(cfg.id); }}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {selectedConfig === cfg.id && (
+              <div className="overflow-x-auto">
+                {runs.length === 0 ? (
+                  <p className="p-4 text-sm text-slate-500">No backup runs yet.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700/40">
+                        {['Date', 'Status', 'Size', 'Duration', 'Destination'].map((h) => (
+                          <th key={h} className="px-4 py-2 text-left text-xs text-slate-500 font-medium">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {runs.map((run) => (
+                        <tr key={run.id} className="border-b border-slate-700/20 last:border-0">
+                          <td className="px-4 py-2.5 text-xs text-slate-400">{run.createdAt ? new Date(run.createdAt).toLocaleString() : '—'}</td>
+                          <td className="px-4 py-2.5">
+                            <span className={`text-xs font-medium ${run.status === 'success' ? 'text-green-400' : run.status === 'running' ? 'text-blue-400' : 'text-red-400'}`}>
+                              {run.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-slate-400">{formatBytes(run.sizeBytes)}</td>
+                          <td className="px-4 py-2.5 text-xs text-slate-400">{run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : '—'}</td>
+                          <td className="px-4 py-2.5 text-xs text-slate-500 font-mono truncate max-w-[200px]">{run.destinationPath ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 export function AppDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const qc = useQueryClient();
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'admin';
@@ -65,6 +349,10 @@ export function AppDetail() {
   const [envVars, setEnvVars] = useState<EnvVar[] | null>(null);
   const [configForm, setConfigForm] = useState<ConfigForm | null>(null);
   const [confirmDel, setConfirmDel] = useState(false);
+
+  // Show credentials banner when arriving from the creation form (?created=1)
+  const [credsDismissed, setCredsDismissed] = useState(false);
+  const justCreated = searchParams.get('created') === '1';
 
   const { data: app, isLoading } = useApp(id!);
   const { data: status } = useAppStatus(id!);
@@ -185,6 +473,8 @@ export function AppDetail() {
     { id: 'environment', label: 'Env Vars' },
     { id: 'logs', label: 'Logs' },
     { id: 'deployments', label: 'Déploiements' },
+    { id: 'terminal', label: 'Terminal' },
+    { id: 'backups', label: 'Sauvegardes' },
     { id: 'access', label: 'Équipe', adminOnly: false, ownerOnly: true },
   ];
 
@@ -347,6 +637,18 @@ export function AppDetail() {
         </a>
       )}
 
+      {/* Credentials banner — shown once after creation */}
+      {justCreated && !credsDismissed && app.envVars?.length > 0 && (
+        <div className="mb-4">
+          <CredentialsPanel
+            envVars={app.envVars}
+            dismissible
+            onDismiss={() => setCredsDismissed(true)}
+            withNote
+          />
+        </div>
+      )}
+
       {/* Quick info bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <div className="card p-3">
@@ -427,6 +729,8 @@ export function AppDetail() {
             >
               {t.id === 'config' && <Settings className="w-3.5 h-3.5" />}
               {t.id === 'access' && <ShieldCheck className="w-3.5 h-3.5" />}
+              {t.id === 'terminal' && <Terminal className="w-3.5 h-3.5" />}
+              {t.id === 'backups' && <Database className="w-3.5 h-3.5" />}
               {t.label}
             </button>
           ))}
@@ -1004,6 +1308,16 @@ export function AppDetail() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Terminal ─────────────────────────────────────────────────────────── */}
+      {tab === 'terminal' && (
+        <TerminalTab appId={id!} />
+      )}
+
+      {/* ── Backups ──────────────────────────────────────────────────────────── */}
+      {tab === 'backups' && (
+        <BackupsTab appId={id!} />
       )}
 
       {/* ── Deployments ──────────────────────────────────────────────────────── */}

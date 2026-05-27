@@ -1,0 +1,11 @@
+{
+  "name": "@appk3s/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "appk3s": "./bin/appk3s.js"
+  },
+  "dependencies": {
+    "commander": "^12.0.0"
+  }
+}

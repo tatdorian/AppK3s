@@ -1,9 +1,11 @@
 import {
+  bigint,
   boolean,
   integer,
   json,
   pgEnum,
   pgTable,
+  real,
   text,
   timestamp,
   uuid,
@@ -71,6 +73,9 @@ export const applications = pgTable('applications', {
   domain: varchar('domain', { length: 255 }),
   ingressClass: varchar('ingress_class', { length: 100 }).notNull().default('traefik'),
   tlsEnabled: boolean('tls_enabled').notNull().default(false),
+
+  // Container command override (overrides Docker CMD, keeps ENTRYPOINT)
+  args: json('args').$type<string[]>(),
 
   // Resources
   replicas: integer('replicas').notNull().default(1),
@@ -144,6 +149,76 @@ export const projectMembers = pgTable('project_members', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+// ── API Keys ──────────────────────────────────────────────────────────────────
+export const apiKeys = pgTable('api_keys', {
+  id:          uuid('id').primaryKey().defaultRandom(),
+  userId:      uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name:        varchar('name', { length: 100 }).notNull(),
+  keyHash:     text('key_hash').notNull().unique(),
+  keyPrefix:   varchar('key_prefix', { length: 16 }).notNull(),
+  lastUsedAt:  timestamp('last_used_at'),
+  expiresAt:   timestamp('expires_at'),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+});
+
+// ── Notification channels ─────────────────────────────────────────────────────
+export const notificationChannels = pgTable('notification_channels', {
+  id:        uuid('id').primaryKey().defaultRandom(),
+  userId:    uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name:      varchar('name', { length: 100 }).notNull(),
+  type:      varchar('type', { length: 20 }).notNull(), // 'email' | 'webhook' | 'discord' | 'slack'
+  config:    json('config').notNull().$type<Record<string, string>>(),
+  enabled:   boolean('enabled').default(true).notNull(),
+  events:    json('events').notNull().$type<string[]>().default([]),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ── Alert rules ───────────────────────────────────────────────────────────────
+export const alertRules = pgTable('alert_rules', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  userId:          uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  appId:           uuid('app_id').references(() => applications.id, { onDelete: 'cascade' }),
+  name:            varchar('name', { length: 100 }).notNull(),
+  metric:          varchar('metric', { length: 50 }).notNull(), // 'cpu_percent' | 'memory_percent' | 'pod_restarts'
+  operator:        varchar('operator', { length: 10 }).notNull(), // 'gt' | 'lt'
+  threshold:       real('threshold').notNull(),
+  durationMinutes: integer('duration_minutes').default(5).notNull(),
+  enabled:         boolean('enabled').default(true).notNull(),
+  lastTriggeredAt: timestamp('last_triggered_at'),
+  createdAt:       timestamp('created_at').defaultNow().notNull(),
+});
+
+// ── Backup configs ────────────────────────────────────────────────────────────
+export const backupConfigs = pgTable('backup_configs', {
+  id:            uuid('id').primaryKey().defaultRandom(),
+  appId:         uuid('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
+  name:          varchar('name', { length: 100 }).notNull(),
+  schedule:      varchar('schedule', { length: 100 }).notNull(), // cron
+  destination:   varchar('destination', { length: 20 }).notNull(), // 'local' | 's3'
+  s3Config:      json('s3_config').$type<{
+    bucket: string; region: string; endpoint?: string;
+    accessKey: string; secretKey: string; prefix?: string;
+  }>(),
+  localPath:     text('local_path'),
+  retentionDays: integer('retention_days').default(30).notNull(),
+  enabled:       boolean('enabled').default(true).notNull(),
+  lastRunAt:     timestamp('last_run_at'),
+  createdAt:     timestamp('created_at').defaultNow().notNull(),
+});
+
+// ── Backup runs ───────────────────────────────────────────────────────────────
+export const backupRuns = pgTable('backup_runs', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  configId:        uuid('config_id').notNull().references(() => backupConfigs.id, { onDelete: 'cascade' }),
+  status:          varchar('status', { length: 20 }).notNull(), // 'running' | 'success' | 'failed'
+  sizeBytes:       bigint('size_bytes', { mode: 'number' }),
+  durationMs:      integer('duration_ms'),
+  destinationPath: text('destination_path'),
+  error:           text('error'),
+  createdAt:       timestamp('created_at').defaultNow().notNull(),
+  completedAt:     timestamp('completed_at'),
+});
+
 export type DbUser = typeof users.$inferSelect;
 export type DbApplication = typeof applications.$inferSelect;
 export type DbDeployment = typeof deployments.$inferSelect;
@@ -151,3 +226,8 @@ export type DbSetting = typeof settings.$inferSelect;
 export type DbAppPermission = typeof appPermissions.$inferSelect;
 export type DbProject = typeof projects.$inferSelect;
 export type DbProjectMember = typeof projectMembers.$inferSelect;
+export type DbApiKey = typeof apiKeys.$inferSelect;
+export type DbNotificationChannel = typeof notificationChannels.$inferSelect;
+export type DbAlertRule = typeof alertRules.$inferSelect;
+export type DbBackupConfig = typeof backupConfigs.$inferSelect;
+export type DbBackupRun = typeof backupRuns.$inferSelect;

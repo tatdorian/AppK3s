@@ -22,6 +22,13 @@ const ALLOWED_KEYS = [
   'ovhAppKey',
   'ovhAppSecret',
   'ovhConsumerKey',
+  // SMTP settings
+  'smtpHost',
+  'smtpPort',
+  'smtpUser',
+  'smtpPass',
+  'smtpFrom',
+  'smtpSecure',
 ] as const;
 type SettingKey = (typeof ALLOWED_KEYS)[number];
 
@@ -40,6 +47,13 @@ const DEFAULTS: Record<SettingKey, string> = {
   ovhAppKey:          '',
   ovhAppSecret:       '',
   ovhConsumerKey:     '',
+  // SMTP settings
+  smtpHost:    '',
+  smtpPort:    '587',
+  smtpUser:    '',
+  smtpPass:    '',
+  smtpFrom:    '',
+  smtpSecure:  'false',
 };
 
 async function getAll(): Promise<Record<SettingKey, string>> {

@@ -17,7 +17,7 @@ export const TEMPLATES: AppTemplate[] = [
   {
     id: 'nginx',
     name: 'Nginx',
-    description: 'Serveur web statique haute performance.',
+    description: 'Serveur web statique haute performance. Affiche la page "Welcome to nginx!" par défaut — montez un volume sur /usr/share/nginx/html pour servir vos propres fichiers.',
     category: 'web',
     icon: '🌐',
     docs: 'https://hub.docker.com/_/nginx',
@@ -27,7 +27,10 @@ export const TEMPLATES: AppTemplate[] = [
       imageTag: 'alpine',
       ports: [{ containerPort: 80, protocol: 'TCP' }],
       envVars: [],
-      volumes: [{ name: 'html', mountPath: '/usr/share/nginx/html', size: '1Gi' }],
+      // Pas de volume sur /usr/share/nginx/html : un PVC vide masquerait le contenu
+      // par défaut de l'image et provoquerait une erreur 403 (répertoire vide).
+      // L'utilisateur peut ajouter un volume depuis l'interface après le déploiement.
+      volumes: [],
       replicas: 1,
       ingressClass: 'traefik',
     },
@@ -643,6 +646,9 @@ volumes:
       volumes: [{ name: 'data', mountPath: '/data', size: '20Gi' }],
       replicas: 1,
       ingressClass: 'traefik',
+      // L'image minio/minio a CMD=["minio"] sans arguments → ne démarre pas.
+      // On override le CMD pour passer la commande serveur complète.
+      args: ['server', '/data', '--console-address', ':9001'],
     },
   },
   {
@@ -1354,7 +1360,12 @@ volumes:
       envVars: [
         { key: 'KEYCLOAK_ADMIN', value: 'admin' },
         { key: 'KEYCLOAK_ADMIN_PASSWORD', value: 'changeme' },
+        // KC_PROXY=edge : Keycloak fait confiance aux headers X-Forwarded-* de Traefik
         { key: 'KC_PROXY', value: 'edge' },
+        // Permet HTTP en production (nécessaire derrière un reverse proxy qui gère le TLS)
+        { key: 'KC_HTTP_ENABLED', value: 'true' },
+        // Désactive la vérification stricte du hostname (utile en dev / domaine auto)
+        { key: 'KC_HOSTNAME_STRICT', value: 'false' },
         { key: 'KC_DB', value: 'postgres' },
         { key: 'KC_DB_URL', value: 'jdbc:postgresql://postgres:5432/keycloak' },
         { key: 'KC_DB_USERNAME', value: 'keycloak' },
@@ -1363,6 +1374,8 @@ volumes:
       volumes: [],
       replicas: 1,
       ingressClass: 'traefik',
+      // Keycloak >= 20 nécessite 'start' comme commande principale
+      args: ['start'],
     },
   },
   {

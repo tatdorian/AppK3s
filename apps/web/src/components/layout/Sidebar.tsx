@@ -1,22 +1,30 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Boxes, Settings, Server, Network, Users, Shield,
+  Key, BarChart2, Bell,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.js';
 import { cn } from '../../lib/utils.js';
 
 // Navigation visible à tous les utilisateurs authentifiés
 const baseNav = [
-  { to: '/',     icon: LayoutDashboard, label: 'Dashboard', end: true },
-  { to: '/apps', icon: Boxes,           label: 'Applications', end: false },
+  { to: '/',     icon: LayoutDashboard, label: 'Dashboard',     end: true },
+  { to: '/apps', icon: Boxes,           label: 'Applications',  end: false },
+];
+
+// Outils disponibles pour tous les utilisateurs authentifiés
+const toolsNav = [
+  { to: '/monitoring',    icon: BarChart2, label: 'Monitoring' },
+  { to: '/notifications', icon: Bell,      label: 'Notifications' },
+  { to: '/api-keys',      icon: Key,       label: 'Clés API' },
 ];
 
 // Navigation réservée à l'admin général
 const adminNav = [
-  { to: '/nodes',    icon: Network, label: 'Nœuds' },
-  { to: '/projects', icon: Shield,  label: 'Projets' },
+  { to: '/nodes',    icon: Network,  label: 'Nœuds' },
+  { to: '/projects', icon: Shield,   label: 'Projets' },
   { to: '/settings', icon: Settings, label: 'Paramètres' },
-  { to: '/users',    icon: Users,   label: 'Utilisateurs' },
+  { to: '/users',    icon: Users,    label: 'Utilisateurs' },
 ];
 
 function NavItem({ to, icon: Icon, label, end = false }: { to: string; icon: React.ElementType; label: string; end?: boolean }) {
@@ -57,6 +65,15 @@ export function Sidebar() {
       <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
         {baseNav.map(({ to, icon, label, end }) => (
           <NavItem key={to} to={to} icon={icon} label={label} end={end} />
+        ))}
+
+        {/* Tools — accessible to every authenticated user */}
+        <div className="my-2 border-t border-slate-700/30" />
+        <p className="px-3 py-1 text-xs text-slate-600 uppercase tracking-wide font-medium">
+          Outils
+        </p>
+        {toolsNav.map(({ to, icon, label }) => (
+          <NavItem key={to} to={to} icon={icon} label={label} />
         ))}
 
         {isAdmin && (

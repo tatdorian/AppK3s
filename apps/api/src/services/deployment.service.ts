@@ -4,6 +4,7 @@ import type { DbApplication, DbDeployment } from '../db/schema.js';
 import { KubernetesService } from './kubernetes.service.js';
 import { ComposeService } from './compose.service.js';
 import { GithubService } from './github.service.js';
+import { dispatchNotification } from './notification.service.js';
 
 export class DeploymentService {
   private compose: ComposeService;
@@ -28,12 +29,12 @@ export class DeploymentService {
       .where(eq(schema.applications.id, app.id));
 
     // Run async - don't block the HTTP response
-    this.runDeploy(app, deployment.id).catch(console.error);
+    this.runDeploy(app, deployment.id, triggeredById).catch(console.error);
 
     return deployment;
   }
 
-  private async runDeploy(app: DbApplication, deploymentId: string): Promise<void> {
+  private async runDeploy(app: DbApplication, deploymentId: string, triggeredById?: string): Promise<void> {
     // Append a log line by SQL concat (avoids read-modify-write race condition)
     const appendLog = async (line: string) => {
       await db.execute(
@@ -130,6 +131,18 @@ export class DeploymentService {
         .update(schema.applications)
         .set({ status: 'running', updatedAt: new Date() })
         .where(eq(schema.applications.id, app.id));
+
+      // Notify the triggering user (fire & forget)
+      if (triggeredById) {
+        const accessUrl = app.subdomain && app.domain
+          ? `${app.tlsEnabled ? 'https' : 'http'}://${app.subdomain}.${app.domain}`
+          : undefined;
+        dispatchNotification('deploy.success', triggeredById, {
+          appName: app.name,
+          appId: app.id,
+          url: accessUrl,
+        }).catch(() => {/* ignore notification errors */});
+      }
     } catch (err: any) {
       const message = err?.message ?? String(err);
       await db
@@ -143,6 +156,15 @@ export class DeploymentService {
         .where(eq(schema.applications.id, app.id));
 
       console.error(`Deploy failed for app ${app.name}:`, err);
+
+      // Notify on failure
+      if (triggeredById) {
+        dispatchNotification('deploy.fail', triggeredById, {
+          appName: app.name,
+          appId: app.id,
+          error: message,
+        }).catch(() => {/* ignore notification errors */});
+      }
     }
   }
 

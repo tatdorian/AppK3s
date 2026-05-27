@@ -10,6 +10,7 @@ import { settingsApi, projectsApi, appsApi } from '../lib/api.js';
 import { EnvVarsEditor } from '../components/EnvVarsEditor.js';
 import { TEMPLATES, TEMPLATE_CATEGORIES, IMAGE_PORT_MAP } from '@appk3s/shared';
 import type { AppTemplate, EnvVar, Port, Volume } from '@appk3s/shared';
+import { CredentialsPanel } from '../components/CredentialsPanel.js';
 import { useAuthStore } from '../store/auth.js';
 import { useProjectStore } from '../store/project.js';
 
@@ -112,7 +113,9 @@ export function CreateApp() {
   const { currentProjectId: storeProjectId } = useProjectStore();
 
   // ── Step & template selection ──────────────────────────────────────────────
-  const [step, setStep]       = useState<Step>('gallery');
+  // If ?template=<id> is in the URL, start directly on the form step
+  const templateIdFromUrl = searchParams.get('template');
+  const [step, setStep]       = useState<Step>(templateIdFromUrl ? 'form' : 'gallery');
   const [search, setSearch]   = useState('');
   const [category, setCategory] = useState('all');
   const [selectedTemplate, setSelectedTemplate] = useState<AppTemplate | null>(null);
@@ -143,6 +146,8 @@ export function CreateApp() {
   const [replicas, setReplicas]   = useState(1);
   const [cpuLimit, setCpuLimit]   = useState('');
   const [memoryLimit, setMemoryLimit] = useState('');
+  // Container CMD override (array of args for images that need explicit commands e.g. MinIO)
+  const [args, setArgs]           = useState<string[]>([]);
   const [autoDeploy, setAutoDeploy]   = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -176,7 +181,7 @@ export function CreateApp() {
       setGithubBranch('main'); setGithubComposePath('docker-compose.yml');
       setGithubIsPrivate(false);
       setEnvVars([]); setPorts([]); setVolumes([]);
-      setName(''); setReplicas(1);
+      setName(''); setReplicas(1); setArgs([]);
     } else {
       setSelectedTemplate(tpl);
       setType(tpl.defaults.type);
@@ -189,9 +194,19 @@ export function CreateApp() {
       setIngressClass(tpl.defaults.ingressClass ?? 'traefik');
       setName(tpl.id);
       setComposeContent((tpl.defaults as any).composeContent ?? '');
+      setArgs([...(tpl.defaults.args ?? [])]);
     }
     setStep('form');
   };
+
+  // ── Auto-apply template from ?template=<id> URL param ─────────────────────
+  // Runs once on mount — applyTemplate is stable (only calls state setters)
+  useEffect(() => {
+    if (!templateIdFromUrl) return;
+    const tpl = TEMPLATES.find((t) => t.id === templateIdFromUrl);
+    if (tpl) applyTemplate(tpl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty: run once on mount
 
   // ── Filtered templates ─────────────────────────────────────────────────────
   const filtered = TEMPLATES.filter((t) => {
@@ -240,12 +255,13 @@ export function CreateApp() {
       cpuLimit: cpuLimit || undefined,
       memoryLimit: memoryLimit || undefined,
       projectId: projectId || undefined,
+      args: args.length > 0 ? args : undefined,
     });
 
     if (autoDeploy) {
       await appsApi.deploy(app.id).catch(() => {});
     }
-    navigate(`/apps/${app.id}`);
+    navigate(`/apps/${app.id}?created=1`);
   };
 
   const backLink = preselectedProjectId ? `/projects/${preselectedProjectId}` : '/apps';
@@ -877,6 +893,9 @@ export function CreateApp() {
             </div>
           )}
         </div>
+
+        {/* ── Identifiants configurés ─────────────────────────────────────── */}
+        <CredentialsPanel envVars={envVars} />
 
         {/* ── Submit ───────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-4 pt-1">

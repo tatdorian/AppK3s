@@ -13,6 +13,9 @@ import { SettingsPage } from './pages/SettingsPage.js';
 import { UsersPage } from './pages/UsersPage.js';
 import { ProjectsPage } from './pages/ProjectsPage.js';
 import { ProjectDetail } from './pages/ProjectDetail.js';
+import { ApiKeysPage } from './pages/ApiKeysPage.js';
+import { MonitoringPage } from './pages/MonitoringPage.js';
+import { NotificationsPage } from './pages/NotificationsPage.js';
 import { useAuthStore } from './store/auth.js';
 import { authApi } from './lib/api.js';
 
@@ -127,6 +130,11 @@ export default function App() {
           <Route path="apps" element={<AppsPage />} />
           <Route path="apps/new" element={<CreateApp />} />
           <Route path="apps/:id" element={<AppDetail />} />
+
+          {/* Available to all authenticated users */}
+          <Route path="api-keys"       element={<ApiKeysPage />} />
+          <Route path="monitoring"     element={<MonitoringPage />} />
+          <Route path="notifications"  element={<NotificationsPage />} />
 
           {/* Admin-only */}
           <Route path="nodes"          element={<RequireAdmin><NodesPage /></RequireAdmin>} />

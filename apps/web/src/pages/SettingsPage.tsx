@@ -16,11 +16,14 @@ import {
   CheckCircle2,
   XCircle,
   RefreshCw,
+  Mail,
+  SendHorizonal,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth.js';
 import { settingsApi, usersApi } from '../lib/api.js';
 import type { ClusterSettings, User } from '@appk3s/shared';
 import toast from 'react-hot-toast';
+import axios from 'axios';
 
 // ─── Password input with show/hide toggle ───────────────────────────────────
 function PasswordInput({
@@ -501,6 +504,174 @@ function WildcardSection({
   );
 }
 
+// ── SMTP section ──────────────────────────────────────────────────────────────
+function SmtpSection({
+  settings,
+  onSave,
+  saving,
+}: {
+  settings: ClusterSettings | undefined;
+  onSave: (data: Partial<ClusterSettings>) => void;
+  saving: boolean;
+}) {
+  const [smtpHost, setSmtpHost] = useState('');
+  const [smtpPort, setSmtpPort] = useState('587');
+  const [smtpUser, setSmtpUser] = useState('');
+  const [smtpPass, setSmtpPass] = useState('');
+  const [smtpFrom, setSmtpFrom] = useState('');
+  const [smtpSecure, setSmtpSecure] = useState(false);
+  const [testEmail, setTestEmail] = useState('');
+  const [testLoading, setTestLoading] = useState(false);
+
+  useEffect(() => {
+    if (!settings) return;
+    setSmtpHost(settings.smtpHost ?? '');
+    setSmtpPort(settings.smtpPort ?? '587');
+    setSmtpUser(settings.smtpUser ?? '');
+    setSmtpPass(settings.smtpPass ?? '');
+    setSmtpFrom(settings.smtpFrom ?? '');
+    setSmtpSecure(settings.smtpSecure === 'true');
+  }, [settings]);
+
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSave({
+      smtpHost,
+      smtpPort,
+      smtpUser,
+      smtpPass,
+      smtpFrom,
+      smtpSecure: String(smtpSecure),
+    });
+  };
+
+  const handleTest = async () => {
+    if (!testEmail) return;
+    setTestLoading(true);
+    try {
+      await axios.post('/api/notifications/channels/test-smtp', { email: testEmail }, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+      });
+      toast.success('Test email sent!');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message ?? 'Failed to send test email');
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSave}>
+      <div className="card p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Mail className="w-4 h-4 text-accent" />
+          <h2 className="text-sm font-semibold text-white">SMTP Configuration</h2>
+        </div>
+        <p className="text-xs text-slate-500 -mt-2">
+          Configure SMTP to send email notifications for deployments and alerts.
+        </p>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">SMTP Host</label>
+            <input
+              className="input"
+              placeholder="smtp.example.com"
+              value={smtpHost}
+              onChange={(e) => setSmtpHost(e.target.value.trim())}
+            />
+          </div>
+          <div>
+            <label className="label">Port</label>
+            <input
+              className="input"
+              type="number"
+              placeholder="587"
+              value={smtpPort}
+              onChange={(e) => setSmtpPort(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Username</label>
+            <input
+              className="input"
+              placeholder="user@example.com"
+              value={smtpUser}
+              onChange={(e) => setSmtpUser(e.target.value.trim())}
+              autoComplete="off"
+            />
+          </div>
+          <div>
+            <label className="label">Password</label>
+            <PasswordInput value={smtpPass} onChange={setSmtpPass} autoComplete="new-password" />
+          </div>
+        </div>
+
+        <div>
+          <label className="label">From address</label>
+          <input
+            className="input"
+            placeholder="AppK3s <noreply@example.com>"
+            value={smtpFrom}
+            onChange={(e) => setSmtpFrom(e.target.value.trim())}
+          />
+        </div>
+
+        <div className="flex items-center gap-3">
+          <input
+            type="checkbox"
+            id="smtpSecure"
+            checked={smtpSecure}
+            onChange={(e) => setSmtpSecure(e.target.checked)}
+            className="w-4 h-4 rounded accent-accent"
+          />
+          <label htmlFor="smtpSecure" className="text-sm text-slate-300">
+            Use TLS (port 465)
+          </label>
+        </div>
+
+        {smtpHost && (
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              className="input flex-1"
+              type="email"
+              placeholder="Send test email to…"
+              value={testEmail}
+              onChange={(e) => setTestEmail(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn-ghost shrink-0"
+              disabled={!testEmail || testLoading}
+              onClick={handleTest}
+            >
+              {testLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <SendHorizonal className="w-4 h-4" />
+              )}
+              Test
+            </button>
+          </div>
+        )}
+
+        <div className="flex justify-end pt-1">
+          <button type="submit" className="btn-primary" disabled={saving}>
+            {saving ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+            ) : (
+              <><Save className="w-4 h-4" /> Save SMTP</>
+            )}
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export function SettingsPage() {
   const { user } = useAuthStore();
@@ -632,6 +803,13 @@ export function SettingsPage() {
           </div>
         </div>
       </form>
+
+      {/* SMTP configuration */}
+      <SmtpSection
+        settings={settings}
+        onSave={(data) => saveMut.mutate(data)}
+        saving={saveMut.isPending}
+      />
 
       {/* User management (admin only) */}
       {isAdmin && (

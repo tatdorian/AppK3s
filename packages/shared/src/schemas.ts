@@ -46,6 +46,8 @@ export const createAppSchema = z.object({
   replicas: z.number().int().min(0).max(50).default(1),
   cpuLimit: z.string().optional(),
   memoryLimit: z.string().optional(),
+  /** Overrides Docker CMD (keeps ENTRYPOINT). Split array of args. */
+  args: z.array(z.string()).optional(),
 });
 
 // type is immutable after creation; name is editable (triggers k8s resource rename)

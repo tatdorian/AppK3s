@@ -53,6 +53,8 @@ export interface Application {
   replicas: number;
   cpuLimit?: string;
   memoryLimit?: string;
+  /** Overrides the Docker CMD (keeps ENTRYPOINT). Used for images that need explicit server args (e.g. MinIO). */
+  args?: string[];
   projectId?: string;
   createdAt: string;
   updatedAt: string;
@@ -136,6 +138,13 @@ export interface ClusterSettings {
   ovhAppKey: string;
   ovhAppSecret: string;
   ovhConsumerKey: string;
+  // SMTP
+  smtpHost: string;
+  smtpPort: string;
+  smtpUser: string;
+  smtpPass: string;
+  smtpFrom: string;
+  smtpSecure: string;
 }
 
 export type AppRole = 'owner' | 'editor' | 'viewer';
@@ -197,4 +206,96 @@ export interface ApiError {
   error: string;
   message: string;
   statusCode: number;
+}
+
+// ── API Keys ──────────────────────────────────────────────────────────────────
+
+export interface ApiKey {
+  id: string;
+  userId: string;
+  name: string;
+  keyPrefix: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+/** Returned only once on creation */
+export interface ApiKeyCreated extends ApiKey {
+  key: string;
+}
+
+// ── Notification Channels ─────────────────────────────────────────────────────
+
+export type NotificationChannelType = 'email' | 'webhook' | 'discord' | 'slack';
+
+export interface NotificationChannel {
+  id: string;
+  userId: string;
+  name: string;
+  type: NotificationChannelType;
+  config: Record<string, string>;
+  enabled: boolean;
+  events: string[];
+  createdAt: string;
+}
+
+// ── Alert Rules ───────────────────────────────────────────────────────────────
+
+export type AlertMetric = 'cpu_percent' | 'memory_percent' | 'pod_restarts';
+export type AlertOperator = 'gt' | 'lt';
+
+export interface AlertRule {
+  id: string;
+  userId: string;
+  appId: string | null;
+  name: string;
+  metric: AlertMetric;
+  operator: AlertOperator;
+  threshold: number;
+  durationMinutes: number;
+  enabled: boolean;
+  lastTriggeredAt: string | null;
+  createdAt: string;
+}
+
+// ── Backup Configs ────────────────────────────────────────────────────────────
+
+export interface S3BackupConfig {
+  bucket: string;
+  region: string;
+  endpoint?: string;
+  accessKey: string;
+  secretKey: string;
+  prefix?: string;
+}
+
+export interface BackupConfig {
+  id: string;
+  appId: string;
+  name: string;
+  schedule: string;
+  destination: 'local' | 's3';
+  s3Config?: S3BackupConfig | null;
+  localPath?: string | null;
+  retentionDays: number;
+  enabled: boolean;
+  lastRunAt: string | null;
+  createdAt: string;
+}
+
+// ── Backup Runs ───────────────────────────────────────────────────────────────
+
+export type BackupRunStatus = 'running' | 'success' | 'failed';
+
+export interface BackupRun {
+  id: string;
+  configId: string;
+  status: BackupRunStatus;
+  sizeBytes: number | null;
+  durationMs: number | null;
+  destinationPath: string | null;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
 }

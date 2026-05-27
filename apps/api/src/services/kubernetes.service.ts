@@ -138,6 +138,9 @@ export class KubernetesService {
               envFrom,
               volumeMounts,
               resources,
+              // Override Docker CMD when the template requires explicit server args
+              // (e.g. MinIO needs ["server", "/data", "--console-address", ":9001"])
+              ...(app.args && app.args.length > 0 ? { args: app.args } : {}),
             },
           ],
           volumes,

@@ -57,6 +57,27 @@
       "when": 1748960000000,
       "tag": "0007_github",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1748980000000,
+      "tag": "0008_must_change_password",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1749000000000,
+      "tag": "0009_args",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1749100000000,
+      "tag": "0010_features",
+      "breakpoints": true
     }
   ]
 }

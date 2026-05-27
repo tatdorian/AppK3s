@@ -12,6 +12,12 @@ import type {
   UpdateAppInput,
   LoginInput,
   RegisterInput,
+  ApiKey,
+  ApiKeyCreated,
+  NotificationChannel,
+  AlertRule,
+  BackupConfig,
+  BackupRun,
 } from '@appk3s/shared';
 
 const http = axios.create({
@@ -175,6 +181,115 @@ export const usersApi = {
     http.patch<User>(`/api/users/${id}`, data).then((r) => r.data),
 
   delete: (id: string) => http.delete(`/api/users/${id}`),
+};
+
+// ─── API Keys ─────────────────────────────────────────────────────────────────
+
+export const apiKeysApi = {
+  list: () => http.get<ApiKey[]>('/api/auth/api-keys').then((r) => r.data),
+
+  create: (data: { name: string; expiresAt?: string }) =>
+    http.post<ApiKeyCreated>('/api/auth/api-keys', data).then((r) => r.data),
+
+  revoke: (id: string) => http.delete(`/api/auth/api-keys/${id}`),
+};
+
+// ─── Terminal ─────────────────────────────────────────────────────────────────
+
+export const terminalApi = {
+  listPods: (appId: string) =>
+    http.get<string[]>(`/api/apps/${appId}/terminal/pods`).then((r) => r.data),
+};
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+export const notificationsApi = {
+  listChannels: () =>
+    http.get<NotificationChannel[]>('/api/notifications/channels').then((r) => r.data),
+
+  createChannel: (data: {
+    name: string;
+    type: string;
+    config: Record<string, string>;
+    events?: string[];
+    enabled?: boolean;
+  }) => http.post<NotificationChannel>('/api/notifications/channels', data).then((r) => r.data),
+
+  updateChannel: (id: string, data: Partial<NotificationChannel>) =>
+    http.patch<NotificationChannel>(`/api/notifications/channels/${id}`, data).then((r) => r.data),
+
+  deleteChannel: (id: string) => http.delete(`/api/notifications/channels/${id}`),
+
+  testChannel: (id: string) =>
+    http.post<{ ok: boolean }>(`/api/notifications/channels/${id}/test`).then((r) => r.data),
+};
+
+// ─── Monitoring ───────────────────────────────────────────────────────────────
+
+export const monitoringApi = {
+  getNodeMetrics: () =>
+    http.get<Array<NodeInfo & { cpuPercent: number | null; memoryPercent: number | null }>>('/api/monitoring/metrics/nodes').then((r) => r.data),
+
+  getAppMetrics: (appId: string) =>
+    http.get<{
+      appId: string;
+      appName: string;
+      pods: Array<{ name: string; phase: string; ready: boolean; restarts: number; age: string; node: string }>;
+      totalPods: number;
+      runningPods: number;
+      totalRestarts: number;
+    }>(`/api/monitoring/metrics/apps/${appId}`).then((r) => r.data),
+
+  listAlerts: () =>
+    http.get<AlertRule[]>('/api/monitoring/alerts').then((r) => r.data),
+
+  createAlert: (data: {
+    name: string;
+    metric: string;
+    operator: string;
+    threshold: number;
+    durationMinutes?: number;
+    appId?: string;
+  }) => http.post<AlertRule>('/api/monitoring/alerts', data).then((r) => r.data),
+
+  updateAlert: (id: string, data: Partial<AlertRule>) =>
+    http.patch<AlertRule>(`/api/monitoring/alerts/${id}`, data).then((r) => r.data),
+
+  deleteAlert: (id: string) => http.delete(`/api/monitoring/alerts/${id}`),
+};
+
+// ─── Backups ──────────────────────────────────────────────────────────────────
+
+export const backupsApi = {
+  list: () => http.get<BackupConfig[]>('/api/backups').then((r) => r.data),
+
+  create: (data: {
+    appId: string;
+    name: string;
+    schedule: string;
+    destination: 'local' | 's3';
+    s3Config?: {
+      bucket: string;
+      region: string;
+      endpoint?: string;
+      accessKey: string;
+      secretKey: string;
+      prefix?: string;
+    };
+    localPath?: string;
+    retentionDays?: number;
+  }) => http.post<BackupConfig>('/api/backups', data).then((r) => r.data),
+
+  update: (id: string, data: Partial<BackupConfig>) =>
+    http.patch<BackupConfig>(`/api/backups/${id}`, data).then((r) => r.data),
+
+  delete: (id: string) => http.delete(`/api/backups/${id}`),
+
+  listRuns: (id: string) =>
+    http.get<BackupRun[]>(`/api/backups/${id}/runs`).then((r) => r.data),
+
+  triggerRun: (id: string) =>
+    http.post<{ ok: boolean; message: string }>(`/api/backups/${id}/run`).then((r) => r.data),
 };
 
 // ─── WebSocket log stream ─────────────────────────────────────────────────────

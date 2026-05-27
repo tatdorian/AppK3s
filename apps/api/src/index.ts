@@ -5,6 +5,7 @@ import websocket from '@fastify/websocket';
 import { config } from './config.js';
 import authPlugin from './plugins/auth.js';
 import { registerRoutes } from './routes/index.js';
+import { startWorkers } from './workers/index.js';
 
 const app = Fastify({
   logger: {
@@ -29,6 +30,9 @@ async function bootstrap() {
 
   await app.listen({ port: config.port, host: '0.0.0.0' });
   app.log.info(`AppK3s API running on :${config.port}`);
+
+  // Start background workers (backup scheduler + alert checker)
+  await startWorkers();
 }
 
 bootstrap().catch((err) => {
