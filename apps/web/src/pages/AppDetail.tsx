@@ -39,6 +39,11 @@ interface ConfigForm {
   image: string;
   imageTag: string;
   composeContent: string;
+  // GitHub source (type === 'github')
+  githubToken: string;
+  githubUsername: string;
+  githubBranch: string;
+  githubComposePath: string;
   subdomain: string;
   domain: string;
   ingressClass: string;
@@ -146,6 +151,10 @@ export function AppDetail() {
         image: app.image ?? '',
         imageTag: app.imageTag,
         composeContent: app.composeContent ?? '',
+        githubToken: (app as any).githubToken ?? '',
+        githubUsername: (app as any).githubUsername ?? '',
+        githubBranch: (app as any).githubBranch ?? 'main',
+        githubComposePath: (app as any).githubComposePath ?? 'docker-compose.yml',
         subdomain: app.subdomain ?? '',
         domain: app.domain ?? '',
         ingressClass: app.ingressClass,
@@ -204,6 +213,10 @@ export function AppDetail() {
       image: app.image ?? '',
       imageTag: app.imageTag,
       composeContent: app.composeContent ?? '',
+      githubToken: (app as any).githubToken ?? '',
+      githubUsername: (app as any).githubUsername ?? '',
+      githubBranch: (app as any).githubBranch ?? 'main',
+      githubComposePath: (app as any).githubComposePath ?? 'docker-compose.yml',
       subdomain: app.subdomain ?? '',
       domain: app.domain ?? '',
       ingressClass: app.ingressClass,
@@ -222,6 +235,11 @@ export function AppDetail() {
       image: configForm.image || undefined,
       imageTag: configForm.imageTag,
       composeContent: configForm.composeContent || undefined,
+      // GitHub fields (githubUrl is immutable after creation — not included)
+      githubToken: configForm.githubToken || undefined,
+      githubUsername: configForm.githubUsername || undefined,
+      githubBranch: configForm.githubBranch || undefined,
+      githubComposePath: configForm.githubComposePath || undefined,
       subdomain: configForm.subdomain || undefined,
       domain: configForm.domain || undefined,
       ingressClass: configForm.ingressClass,
@@ -265,7 +283,11 @@ export function AppDetail() {
             </div>
             <p className="text-sm text-slate-500 mt-0.5">
               {app.namespace} ·{' '}
-              {app.type === 'docker-image' ? `${app.image}:${app.imageTag}` : 'docker-compose'}
+              {app.type === 'docker-image'
+                ? `${app.image}:${app.imageTag}`
+                : app.type === 'github'
+                ? `🐙 ${(app as any).githubUrl ?? 'github'}`
+                : 'docker-compose'}
             </p>
           </div>
         </div>
@@ -447,17 +469,25 @@ export function AppDetail() {
               </table>
             </div>
           )}
-          {app.type === 'compose' && app.composeContent && (
+          {(app.type === 'compose' || app.type === 'github') && app.composeContent && (
             <div className="card overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-700/40">
+              <div className="px-4 py-3 border-b border-slate-700/40 flex items-center gap-2">
                 <h3 className="text-sm font-semibold text-white">docker-compose.yml</h3>
+                {app.type === 'github' && (
+                  <span className="text-xs text-slate-500">(récupéré depuis GitHub au dernier déploiement)</span>
+                )}
               </div>
               <pre className="p-4 text-xs font-mono text-slate-300 overflow-x-auto">{app.composeContent}</pre>
             </div>
           )}
-          {(!status?.pods || status.pods.length === 0) && app.type !== 'compose' && (
+          {(!status?.pods || status.pods.length === 0) && app.type !== 'compose' && app.type !== 'github' && (
             <div className="card p-6 text-center text-slate-500 text-sm">
               Aucun pod en cours — déployez l'application pour la démarrer.
+            </div>
+          )}
+          {(!status?.pods || status.pods.length === 0) && app.type === 'github' && !app.composeContent && (
+            <div className="card p-6 text-center text-slate-500 text-sm">
+              Aucun déploiement effectué — cliquez sur <strong className="text-slate-300">Deploy</strong> pour récupérer le compose depuis GitHub et démarrer l'application.
             </div>
           )}
         </div>
@@ -534,6 +564,80 @@ export function AppDetail() {
                     onChange={(e) => setConfigForm((f) => f ? { ...f, imageTag: e.target.value } : f)}
                   />
                 </div>
+              </div>
+            ) : app.type === 'github' ? (
+              /* ── GitHub source ── */
+              <div className="space-y-3">
+                {/* Security warning */}
+                <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-300 text-xs">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>Le token est stocké en clair. Utilisez un token à permissions minimales (lecture seule).</span>
+                </div>
+
+                {/* URL — read-only */}
+                <div>
+                  <label className="label">URL du dépôt GitHub</label>
+                  <div className="input bg-surface-200/50 text-slate-400 font-mono text-sm flex items-center gap-2 overflow-hidden">
+                    <span className="text-base">🐙</span>
+                    <span className="truncate">{(app as any).githubUrl}</span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1">L'URL ne peut pas être modifiée après la création.</p>
+                </div>
+
+                {/* Branch + compose path */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Branche</label>
+                    <input
+                      className="input"
+                      placeholder="main"
+                      value={configForm.githubBranch}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubBranch: e.target.value } : f)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Chemin du fichier compose</label>
+                    <input
+                      className="input"
+                      placeholder="docker-compose.yml"
+                      value={configForm.githubComposePath}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubComposePath: e.target.value } : f)}
+                    />
+                  </div>
+                </div>
+
+                {/* Credentials */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Nom d'utilisateur GitHub</label>
+                    <input
+                      className="input"
+                      placeholder="monlogin (facultatif pour repos publics)"
+                      value={configForm.githubUsername}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubUsername: e.target.value } : f)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Token d'accès (PAT)</label>
+                    <input
+                      className="input"
+                      type="password"
+                      placeholder="ghp_... (laisser vide pour repos publics)"
+                      value={configForm.githubToken}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubToken: e.target.value } : f)}
+                    />
+                  </div>
+                </div>
+
+                {/* Last fetched compose (read-only display) */}
+                {app.composeContent && (
+                  <div>
+                    <label className="label">Contenu récupéré au dernier déploiement (lecture seule)</label>
+                    <pre className="input font-mono text-xs h-32 overflow-y-auto resize-none bg-surface-200/50 text-slate-400 whitespace-pre-wrap">
+                      {app.composeContent}
+                    </pre>
+                  </div>
+                )}
               </div>
             ) : (
               <div>

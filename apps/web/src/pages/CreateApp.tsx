@@ -13,7 +13,7 @@ import type { AppTemplate, EnvVar, Port, Volume } from '@appk3s/shared';
 import { useAuthStore } from '../store/auth.js';
 import { useProjectStore } from '../store/project.js';
 
-type AppType = 'docker-image' | 'compose';
+type AppType = 'docker-image' | 'compose' | 'github';
 type Step = 'gallery' | 'form';
 
 // ─── Category colours ─────────────────────────────────────────────────────────
@@ -48,6 +48,13 @@ const CUSTOM_CARDS = [
     name: 'Docker Compose',
     description: 'Coller un fichier docker-compose.yml multi-services.',
     icon: '📄',
+    category: null,
+  },
+  {
+    id: '__github',
+    name: 'GitHub',
+    description: 'Récupérer un docker-compose.yml depuis un dépôt GitHub public ou privé.',
+    icon: '🐙',
     category: null,
   },
 ];
@@ -119,6 +126,13 @@ export function CreateApp() {
   const [image, setImage]         = useState('');
   const [imageTag, setImageTag]   = useState('latest');
   const [composeContent, setComposeContent] = useState('');
+  // GitHub source state
+  const [githubUrl, setGithubUrl]                   = useState('');
+  const [githubToken, setGithubToken]               = useState('');
+  const [githubUsername, setGithubUsername]         = useState('');
+  const [githubBranch, setGithubBranch]             = useState('main');
+  const [githubComposePath, setGithubComposePath]   = useState('docker-compose.yml');
+  const [githubIsPrivate, setGithubIsPrivate]       = useState(false);
   const [envVars, setEnvVars]     = useState<EnvVar[]>([]);
   const [ports, setPorts]         = useState<Port[]>([]);
   const [volumes, setVolumes]     = useState<Volume[]>([]);
@@ -158,6 +172,9 @@ export function CreateApp() {
       setSelectedTemplate(null);
       setType(customType ?? 'docker-image');
       setImage(''); setImageTag('latest'); setComposeContent('');
+      setGithubUrl(''); setGithubToken(''); setGithubUsername('');
+      setGithubBranch('main'); setGithubComposePath('docker-compose.yml');
+      setGithubIsPrivate(false);
       setEnvVars([]); setPorts([]); setVolumes([]);
       setName(''); setReplicas(1);
     } else {
@@ -210,6 +227,12 @@ export function CreateApp() {
       image: type === 'docker-image' ? image : undefined,
       imageTag,
       composeContent: type === 'compose' ? composeContent : undefined,
+      // GitHub fields
+      githubUrl: type === 'github' ? githubUrl : undefined,
+      githubToken: type === 'github' && githubIsPrivate && githubToken ? githubToken : undefined,
+      githubUsername: type === 'github' && githubIsPrivate && githubUsername ? githubUsername : undefined,
+      githubBranch: type === 'github' ? (githubBranch || 'main') : undefined,
+      githubComposePath: type === 'github' ? (githubComposePath || 'docker-compose.yml') : undefined,
       envVars, ports, volumes,
       subdomain: subdomain || undefined,
       domain: domain || undefined,
@@ -285,7 +308,7 @@ export function CreateApp() {
                   name={c.name}
                   description={c.description}
                   category={c.category}
-                  onSelect={() => applyTemplate(null, c.id === '__compose' ? 'compose' : 'docker-image')}
+                  onSelect={() => applyTemplate(null, c.id === '__compose' ? 'compose' : c.id === '__github' ? 'github' : 'docker-image')}
                 />
               ))}
             </div>
@@ -376,7 +399,7 @@ export function CreateApp() {
         ) : (
           <div>
             <h1 className="text-2xl font-bold text-white">
-              {type === 'compose' ? '📄 Docker Compose' : '🐳 Image Docker'}
+              {type === 'compose' ? '📄 Docker Compose' : type === 'github' ? '🐙 GitHub' : '🐳 Image Docker'}
             </h1>
             <p className="text-slate-400 text-sm">Configuration personnalisée</p>
           </div>
@@ -414,7 +437,7 @@ export function CreateApp() {
             </div>
           </div>
 
-          {/* Image / Compose source */}
+          {/* Image / Compose / GitHub source */}
           {!selectedTemplate && (
             <div>
               {type === 'docker-image' ? (
@@ -440,7 +463,7 @@ export function CreateApp() {
                     />
                   </div>
                 </div>
-              ) : (
+              ) : type === 'compose' ? (
                 <div>
                   <label className="label">docker-compose.yml *</label>
                   <textarea
@@ -450,6 +473,102 @@ export function CreateApp() {
                     onChange={(e) => setComposeContent(e.target.value)}
                     required
                   />
+                </div>
+              ) : (
+                /* ── GitHub source ── */
+                <div className="space-y-3">
+                  {/* Security warning */}
+                  <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-300 text-xs">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>
+                      Le token d'accès sera stocké en clair dans la base de données.
+                      Utilisez un token PAT avec des permissions minimales (lecture seule sur le dépôt).
+                    </span>
+                  </div>
+
+                  {/* Repo URL */}
+                  <div>
+                    <label className="label">URL du dépôt GitHub *</label>
+                    <input
+                      className="input"
+                      placeholder="https://github.com/utilisateur/mon-repo"
+                      value={githubUrl}
+                      onChange={(e) => setGithubUrl(e.target.value)}
+                      required
+                    />
+                    <p className="text-xs text-slate-600 mt-1">
+                      Formats acceptés : https://github.com/user/repo ou github.com/user/repo
+                    </p>
+                  </div>
+
+                  {/* Public / Private toggle */}
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setGithubIsPrivate(false)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        !githubIsPrivate ? 'bg-accent text-white' : 'bg-surface-300 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      🌐 Public
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGithubIsPrivate(true)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        githubIsPrivate ? 'bg-accent text-white' : 'bg-surface-300 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      🔒 Privé
+                    </button>
+                  </div>
+
+                  {/* Private credentials */}
+                  {githubIsPrivate && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="label">Nom d'utilisateur GitHub</label>
+                        <input
+                          className="input"
+                          placeholder="monlogin"
+                          value={githubUsername}
+                          onChange={(e) => setGithubUsername(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="label">Token d'accès (PAT classique)</label>
+                        <input
+                          className="input"
+                          type="password"
+                          placeholder="ghp_xxxxxxxxxxxx"
+                          value={githubToken}
+                          onChange={(e) => setGithubToken(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Branch + compose path */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="label">Branche</label>
+                      <input
+                        className="input"
+                        placeholder="main"
+                        value={githubBranch}
+                        onChange={(e) => setGithubBranch(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Chemin du fichier compose</label>
+                      <input
+                        className="input"
+                        placeholder="docker-compose.yml"
+                        value={githubComposePath}
+                        onChange={(e) => setGithubComposePath(e.target.value)}
+                      />
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

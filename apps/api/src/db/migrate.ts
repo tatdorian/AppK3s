@@ -17,5 +17,8 @@ export async function runMigrations(): Promise<void> {
 
 // Allow running directly: tsx src/db/migrate.ts
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  runMigrations().catch(console.error);
+  runMigrations().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }

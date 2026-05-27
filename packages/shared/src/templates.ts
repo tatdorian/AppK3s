@@ -84,6 +84,7 @@ export const TEMPLATES: AppTemplate[] = [
     category: 'web',
     icon: '👻',
     docs: 'https://hub.docker.com/_/ghost',
+    requiredEnv: ['url'],
     defaults: {
       type: 'docker-image',
       image: 'ghost',
@@ -93,7 +94,9 @@ export const TEMPLATES: AppTemplate[] = [
         { key: 'NODE_ENV', value: 'production' },
         { key: 'database__client', value: 'sqlite3' },
         { key: 'database__connection__filename', value: '/var/lib/ghost/content/data/ghost.db' },
-        { key: 'url', value: 'http://localhost:2368' },
+        // ⚠️  Doit correspondre à l'URL publique réelle (ex: https://blog.example.com)
+        // Un mauvais URL casse les redirections, les emails et les liens canoniques.
+        { key: 'url', value: 'https://ghost.example.com' },
       ],
       volumes: [{ name: 'content', mountPath: '/var/lib/ghost/content', size: '5Gi' }],
       replicas: 1,
@@ -315,21 +318,79 @@ export const TEMPLATES: AppTemplate[] = [
   {
     id: 'penpot',
     name: 'Penpot',
-    description: 'Outil de design open-source (alternative à Figma).',
-    category: 'web',
+    description: 'Outil de design open-source (alternative à Figma). Stack complète : frontend, backend, exporteur, PostgreSQL et Redis.',
+    category: 'stack',
     icon: '🎨',
-    docs: 'https://hub.docker.com/r/penpotapp/frontend',
+    docs: 'https://help.penpot.app/technical-guide/getting-started/',
     defaults: {
-      type: 'docker-image',
-      image: 'penpotapp/frontend',
+      type: 'compose',
       imageTag: 'latest',
-      ports: [{ containerPort: 80, protocol: 'TCP' }],
-      envVars: [
-        { key: 'PENPOT_FLAGS', value: 'enable-login-with-password' },
-      ],
+      ports: [],
+      envVars: [],
       volumes: [],
       replicas: 1,
       ingressClass: 'traefik',
+      // ⚠️  Le nom de l'app DOIT rester "penpot" (valeur par défaut) pour que
+      //     l'ingress nginx du frontend résolve penpot-backend et penpot-exporter.
+      composeContent: `version: "3.8"
+services:
+  # Frontends nginx — port d'entrée exposé à l'ingress
+  frontend:
+    image: penpotapp/frontend:latest
+    ports:
+      - "80:80"
+    environment:
+      PENPOT_FLAGS: enable-login-with-password
+    depends_on:
+      - backend
+      - exporter
+    volumes:
+      - penpot_assets:/opt/data/assets
+
+  # Backend API (interne, port 6060)
+  backend:
+    image: penpotapp/backend:latest
+    environment:
+      PENPOT_FLAGS: enable-login-with-password
+      PENPOT_DATABASE_URI: postgresql://postgres:5432/penpot
+      PENPOT_DATABASE_USERNAME: penpot
+      PENPOT_DATABASE_PASSWORD: penpotpassword
+      PENPOT_REDIS_URI: redis://redis/0
+      PENPOT_ASSETS_STORAGE_BACKEND: assets-fs
+      PENPOT_STORAGE_ASSETS_FS_DIRECTORY: /opt/data/assets
+      PENPOT_TELEMETRY_ENABLED: "false"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - penpot_assets:/opt/data/assets
+
+  # Exporteur PDF/SVG (interne, port 6061)
+  exporter:
+    image: penpotapp/exporter:latest
+    environment:
+      PENPOT_PUBLIC_URI: http://frontend
+      PENPOT_REDIS_URI: redis://redis/0
+    depends_on:
+      - redis
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_INITDB_ARGS: --data-checksums
+      POSTGRES_DB: penpot
+      POSTGRES_USER: penpot
+      POSTGRES_PASSWORD: penpotpassword
+    volumes:
+      - penpot_postgres:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  penpot_assets:
+  penpot_postgres:
+`,
     },
   },
 
@@ -558,7 +619,7 @@ export const TEMPLATES: AppTemplate[] = [
   {
     id: 'minio',
     name: 'MinIO',
-    description: 'Stockage objet S3-compatible haute performance.',
+    description: 'Stockage objet S3-compatible haute performance. Console web sur :9001, API S3 sur :9000.',
     category: 'storage',
     icon: '🗄️',
     docs: 'https://hub.docker.com/r/minio/minio',
@@ -567,10 +628,17 @@ export const TEMPLATES: AppTemplate[] = [
       type: 'docker-image',
       image: 'minio/minio',
       imageTag: 'latest',
-      ports: [{ containerPort: 9001, protocol: 'TCP' }],
+      // Port 9001 = console web (ingress), port 9000 = API S3
+      // MINIO_CONSOLE_ADDRESS est OBLIGATOIRE : sans lui MinIO choisit
+      // un port aléatoire pour la console et le NodePort 9001 reste vide.
+      ports: [
+        { containerPort: 9001, protocol: 'TCP' },  // console UI → ingress
+        { containerPort: 9000, protocol: 'TCP' },  // S3 API
+      ],
       envVars: [
         { key: 'MINIO_ROOT_USER', value: 'admin' },
         { key: 'MINIO_ROOT_PASSWORD', value: 'changeme123' },
+        { key: 'MINIO_CONSOLE_ADDRESS', value: ':9001' },
       ],
       volumes: [{ name: 'data', mountPath: '/data', size: '20Gi' }],
       replicas: 1,
@@ -804,6 +872,7 @@ export const TEMPLATES: AppTemplate[] = [
     category: 'devops',
     icon: '🐙',
     docs: 'https://hub.docker.com/r/gitea/gitea',
+    requiredEnv: ['GITEA__server__DOMAIN'],
     defaults: {
       type: 'docker-image',
       image: 'gitea/gitea',
@@ -811,7 +880,10 @@ export const TEMPLATES: AppTemplate[] = [
       ports: [{ containerPort: 3000, protocol: 'TCP' }],
       envVars: [
         { key: 'GITEA__database__DB_TYPE', value: 'sqlite3' },
-        { key: 'GITEA__server__DOMAIN', value: '' },
+        // ⚠️  Doit correspondre au sous-domaine public (ex: gitea.mondomaine.com)
+        // Un domaine vide génère des URLs de clone SSH/HTTP avec "localhost" → repos inaccessibles.
+        { key: 'GITEA__server__DOMAIN', value: 'gitea.example.com' },
+        { key: 'GITEA__server__ROOT_URL', value: 'https://gitea.example.com' },
       ],
       volumes: [{ name: 'data', mountPath: '/data', size: '10Gi' }],
       replicas: 1,

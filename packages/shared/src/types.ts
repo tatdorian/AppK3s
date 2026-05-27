@@ -1,4 +1,4 @@
-export type AppType = 'docker-image' | 'compose';
+export type AppType = 'docker-image' | 'compose' | 'github';
 
 export type AppStatus = 'idle' | 'deploying' | 'running' | 'stopped' | 'error';
 
@@ -37,6 +37,12 @@ export interface Application {
   image?: string;
   imageTag: string;
   composeContent?: string;
+  // GitHub source (type === 'github')
+  githubUrl?: string;
+  githubToken?: string;
+  githubUsername?: string;
+  githubBranch?: string;
+  githubComposePath?: string;
   envVars: EnvVar[];
   ports: Port[];
   volumes: Volume[];
@@ -68,6 +74,7 @@ export interface User {
   id: string;
   email: string;
   role: string;
+  mustChangePassword: boolean;
   createdAt: string;
 }
 

@@ -171,7 +171,7 @@ export const usersApi = {
   create: (data: { email: string; password: string; role?: 'admin' | 'viewer' }) =>
     http.post<User>('/api/users', data).then((r) => r.data),
 
-  update: (id: string, data: { role?: string; password?: string; currentPassword?: string }) =>
+  update: (id: string, data: { email?: string; role?: string; password?: string; currentPassword?: string }) =>
     http.patch<User>(`/api/users/${id}`, data).then((r) => r.data),
 
   delete: (id: string) => http.delete(`/api/users/${id}`),

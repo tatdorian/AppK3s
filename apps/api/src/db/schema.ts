@@ -12,7 +12,7 @@ import {
 // Note: boolean is still used by applications.tlsEnabled
 import type { EnvVar, Port, Volume } from '@appk3s/shared';
 
-export const appTypeEnum = pgEnum('app_type', ['docker-image', 'compose']);
+export const appTypeEnum = pgEnum('app_type', ['docker-image', 'compose', 'github']);
 export const appStatusEnum = pgEnum('app_status', [
   'idle',
   'deploying',
@@ -32,6 +32,8 @@ export const users = pgTable('users', {
   email: varchar('email', { length: 255 }).notNull().unique(),
   passwordHash: text('password_hash').notNull(),
   role: varchar('role', { length: 50 }).notNull().default('admin'),
+  // true → user must change password before accessing the app
+  mustChangePassword: boolean('must_change_password').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -48,6 +50,13 @@ export const applications = pgTable('applications', {
 
   // Compose
   composeContent: text('compose_content'),
+
+  // GitHub source (type === 'github')
+  githubUrl: text('github_url'),
+  githubToken: text('github_token'),
+  githubUsername: varchar('github_username', { length: 255 }),
+  githubBranch: varchar('github_branch', { length: 255 }).default('main'),
+  githubComposePath: varchar('github_compose_path', { length: 500 }).default('docker-compose.yml'),
 
   // Runtime config
   envVars: json('env_vars').$type<EnvVar[]>().notNull().default([]),

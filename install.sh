@@ -38,6 +38,21 @@ DB_USER="appk3s"
 DB_PASS="${DB_PASS:-$(openssl rand -hex 16)}"
 JWT_SECRET="${JWT_SECRET:-$(openssl rand -hex 32)}"
 
+# ── Si un volume PostgreSQL existe déjà, réutiliser les credentials du .env ──
+# Évite le "password authentication failed" lors d'une réinstallation
+_EXISTING_ENV="${APP_DIR}/apps/api/.env"
+if docker volume inspect appk3s_postgres_data &>/dev/null 2>&1 && [[ -f "$_EXISTING_ENV" ]]; then
+  _EXISTING_PASS=$(grep -E "^DATABASE_URL=" "$_EXISTING_ENV" \
+    | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|' || true)
+  _EXISTING_JWT=$(grep -E "^JWT_SECRET=" "$_EXISTING_ENV" \
+    | cut -d= -f2 || true)
+  if [[ -n "$_EXISTING_PASS" ]]; then
+    DB_PASS="$_EXISTING_PASS"
+    warn "Volume PostgreSQL existant détecté — réutilisation du mot de passe existant"
+  fi
+  [[ -n "$_EXISTING_JWT" ]] && JWT_SECRET="$_EXISTING_JWT"
+fi
+
 # ── Bannière ──────────────────────────────────────────────────────────────────
 echo -e "${BOLD}"
 cat <<'EOF'

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Layout } from './components/layout/Layout.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { SetupPage } from './pages/SetupPage.js';
+import { ChangePasswordPage } from './pages/ChangePasswordPage.js';
 import { Dashboard } from './pages/Dashboard.js';
 import { AppsPage } from './pages/AppsPage.js';
 import { AppDetail } from './pages/AppDetail.js';
@@ -25,6 +26,18 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
   const { user } = useAuthStore();
   if (!user) return <Navigate to="/" replace />;
   if (user.role !== 'admin') return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+/**
+ * Blocks access to the main app if the user has mustChangePassword = true.
+ * Redirects them to /change-password until they've set a new password.
+ * If user is not yet loaded (null), we let it through — the loading state
+ * will resolve before any sensitive content is shown.
+ */
+function RequirePasswordUpdated({ children }: { children: React.ReactNode }) {
+  const { user } = useAuthStore();
+  if (user?.mustChangePassword) return <Navigate to="/change-password" replace />;
   return <>{children}</>;
 }
 
@@ -90,10 +103,23 @@ export default function App() {
         {/* /setup inaccessible une fois le compte créé */}
         <Route path="/setup" element={<Navigate to="/login" replace />} />
 
+        {/* Changement de mot de passe forcé (compte par défaut) */}
+        <Route
+          path="/change-password"
+          element={
+            <RequireAuth>
+              <ChangePasswordPage />
+            </RequireAuth>
+          }
+        />
+
         <Route
           element={
             <RequireAuth>
-              <Layout />
+              {/* Bloque l'accès si mustChangePassword est true */}
+              <RequirePasswordUpdated>
+                <Layout />
+              </RequirePasswordUpdated>
             </RequireAuth>
           }
         >

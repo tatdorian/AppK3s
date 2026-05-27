@@ -25,11 +25,17 @@ export const createAppSchema = z.object({
     .regex(/^[a-z0-9-]+$/, 'Lowercase letters, numbers and hyphens only'),
   namespace: z.string().default('default'),
   projectId: z.string().uuid().optional(), // null → assigned to Default project
-  type: z.enum(['docker-image', 'compose']),
+  type: z.enum(['docker-image', 'compose', 'github']),
   templateId: z.string().optional(),
   image: z.string().optional(),
   imageTag: z.string().default('latest'),
   composeContent: z.string().optional(),
+  // GitHub source
+  githubUrl: z.string().url().optional(),
+  githubToken: z.string().optional(),
+  githubUsername: z.string().optional(),
+  githubBranch: z.string().optional(),
+  githubComposePath: z.string().optional(),
   envVars: z.array(envVarSchema).default([]),
   ports: z.array(portSchema).default([]),
   volumes: z.array(volumeSchema).default([]),

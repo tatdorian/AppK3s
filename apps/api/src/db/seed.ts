@@ -13,8 +13,9 @@ async function seed() {
     email: 'admin@appk3s.local',
     passwordHash: hash,
     role: 'admin',
+    mustChangePassword: true, // force password change on first login
   });
-  console.log('✅ Default admin created: admin@appk3s.local / admin1234');
+  console.log('✅ Default admin created: admin@appk3s.local / admin1234 (must change password on first login)');
 }
 
 seed().catch(console.error);

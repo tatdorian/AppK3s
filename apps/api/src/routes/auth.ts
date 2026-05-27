@@ -26,7 +26,15 @@ export async function authRoutes(app: FastifyInstance) {
       role: user.role,
     });
 
-    return { token, user: { id: user.id, email: user.email, role: user.role } };
+    return {
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        mustChangePassword: user.mustChangePassword,
+      },
+    };
   });
 
   // POST /api/auth/register  (first user only, or admin)

@@ -59,10 +59,11 @@ export async function usersRoutes(fastify: FastifyInstance) {
   // PATCH /api/users/:id — admin changes role, or self changes password
   fastify.patch<{
     Params: { id: string };
-    Body: { role?: 'admin' | 'viewer'; password?: string; currentPassword?: string };
+    Body: { email?: string; role?: 'admin' | 'viewer'; password?: string; currentPassword?: string };
   }>('/:id', auth, async (request, reply) => {
     const { id } = request.params;
-    const { role, password, currentPassword } = request.body as {
+    const { email, role, password, currentPassword } = request.body as {
+      email?: string;
       role?: 'admin' | 'viewer';
       password?: string;
       currentPassword?: string;
@@ -77,6 +78,20 @@ export async function usersRoutes(fastify: FastifyInstance) {
     const target = await db.query.users.findFirst({ where: eq(schema.users.id, id) });
     if (!target) return reply.code(404).send({ error: 'Not Found' });
 
+    // Email change: self or admin; must not already be taken
+    if (email !== undefined) {
+      if (!isAdmin && !isSelf) {
+        return reply.code(403).send({ error: 'Forbidden' });
+      }
+      if (email !== target.email) {
+        const taken = await db.query.users.findFirst({ where: eq(schema.users.email, email) });
+        if (taken) {
+          return reply.code(409).send({ error: 'Conflict', message: 'Cette adresse email est déjà utilisée' });
+        }
+        await db.update(schema.users).set({ email }).where(eq(schema.users.id, id));
+      }
+    }
+
     // Role change: admin only
     if (role !== undefined) {
       if (!isAdmin) return reply.code(403).send({ error: 'Forbidden', message: 'Admin only' });
@@ -85,18 +100,25 @@ export async function usersRoutes(fastify: FastifyInstance) {
 
     // Password change
     if (password) {
-      if (!isAdmin && isSelf) {
-        // Self must verify current password
+      if (password.length < 8) {
+        return reply.code(400).send({ error: 'Validation', message: 'Le mot de passe doit comporter au moins 8 caractères' });
+      }
+      // Non-admin users must verify their current password,
+      // UNLESS mustChangePassword is true (forced change flow — they already authenticated).
+      if (!isAdmin && isSelf && !target.mustChangePassword) {
         if (!currentPassword) {
           return reply.code(400).send({ error: 'Validation', message: 'currentPassword required' });
         }
         const ok = await bcrypt.compare(currentPassword, target.passwordHash);
         if (!ok) {
-          return reply.code(401).send({ error: 'Unauthorized', message: 'Wrong current password' });
+          return reply.code(401).send({ error: 'Unauthorized', message: 'Mot de passe actuel incorrect' });
         }
       }
       const passwordHash = await bcrypt.hash(password, 12);
-      await db.update(schema.users).set({ passwordHash }).where(eq(schema.users.id, id));
+      // Clear the mustChangePassword flag after a successful password change
+      await db.update(schema.users)
+        .set({ passwordHash, mustChangePassword: false })
+        .where(eq(schema.users.id, id));
     }
 
     const [updated] = await db
@@ -104,6 +126,7 @@ export async function usersRoutes(fastify: FastifyInstance) {
         id: schema.users.id,
         email: schema.users.email,
         role: schema.users.role,
+        mustChangePassword: schema.users.mustChangePassword,
         createdAt: schema.users.createdAt,
       })
       .from(schema.users)

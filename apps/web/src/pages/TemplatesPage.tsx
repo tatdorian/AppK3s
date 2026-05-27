@@ -224,7 +224,11 @@ function TemplateCard({
         </div>
       </div>
       <div className="flex items-center justify-between">
-        <span className="text-xs text-slate-600 font-mono">{template.defaults.image}:{template.defaults.imageTag}</span>
+        <span className="text-xs text-slate-600 font-mono">
+          {template.defaults.type === 'compose'
+            ? '🐋 Stack multi-services'
+            : `${template.defaults.image}:${template.defaults.imageTag}`}
+        </span>
         <span className="text-xs px-2 py-0.5 rounded-full bg-surface-300 text-slate-400">
           {template.category}
         </span>

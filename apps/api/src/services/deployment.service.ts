@@ -3,12 +3,15 @@ import { db, schema } from '../db/index.js';
 import type { DbApplication, DbDeployment } from '../db/schema.js';
 import { KubernetesService } from './kubernetes.service.js';
 import { ComposeService } from './compose.service.js';
+import { GithubService } from './github.service.js';
 
 export class DeploymentService {
   private compose: ComposeService;
+  private github: GithubService;
 
   constructor(private k8s: KubernetesService) {
     this.compose = new ComposeService(k8s);
+    this.github = new GithubService();
   }
 
   async deploy(app: DbApplication, triggeredById?: string): Promise<DbDeployment> {
@@ -71,7 +74,22 @@ export class DeploymentService {
         }
       }
 
-      if (effectiveApp.type === 'compose') {
+      if (effectiveApp.type === 'github') {
+        await appendLog(`[${new Date().toISOString()}] Récupération du docker-compose.yml depuis GitHub : ${effectiveApp.githubUrl}`);
+        const fetchedContent = await this.github.fetchComposeContent(effectiveApp);
+
+        // Persist the fetched content for display and idempotent deletion
+        const [withContent] = await db
+          .update(schema.applications)
+          .set({ composeContent: fetchedContent, updatedAt: new Date() })
+          .where(eq(schema.applications.id, effectiveApp.id))
+          .returning();
+        effectiveApp = withContent;
+
+        await appendLog(`[${new Date().toISOString()}] Parsing docker-compose et application des ressources Kubernetes`);
+        await this.compose.deployCompose(effectiveApp);
+
+      } else if (effectiveApp.type === 'compose') {
         await appendLog(`[${new Date().toISOString()}] Parsing docker-compose and applying resources`);
         await this.compose.deployCompose(effectiveApp);
       } else {
@@ -153,8 +171,11 @@ export class DeploymentService {
   }
 
   async delete(app: DbApplication): Promise<void> {
-    if (app.type === 'compose') {
-      await this.compose.deleteCompose(app);
+    if (app.type === 'compose' || app.type === 'github') {
+      // composeContent is null if the app was never deployed — nothing to clean up in k8s
+      if (app.composeContent) {
+        await this.compose.deleteCompose(app);
+      }
     } else {
       await this.k8s.deleteApp(app);
     }

@@ -154,12 +154,15 @@ export async function appsRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'Validation', message: body.error.flatten() });
     }
 
-    const { type, image, composeContent } = body.data;
+    const { type, image, composeContent, githubUrl } = body.data;
     if (type === 'docker-image' && !image) {
       return reply.code(400).send({ error: 'Validation', message: 'image is required for docker-image type' });
     }
     if (type === 'compose' && !composeContent) {
       return reply.code(400).send({ error: 'Validation', message: 'composeContent is required for compose type' });
+    }
+    if (type === 'github' && !githubUrl) {
+      return reply.code(400).send({ error: 'Validation', message: 'githubUrl est requis pour le type github' });
     }
 
     // If no projectId specified → assign to Default project

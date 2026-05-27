@@ -50,6 +50,13 @@
       "when": 1748880000000,
       "tag": "0006_deployment_triggered_by",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1748960000000,
+      "tag": "0007_github",
+      "breakpoints": true
     }
   ]
 }

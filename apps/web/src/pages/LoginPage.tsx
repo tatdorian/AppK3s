@@ -18,7 +18,12 @@ export function LoginPage() {
     try {
       const { token, user } = await authApi.login({ email, password });
       setAuth(token, user);
-      navigate('/');
+      // Force password change if the default account is used
+      if (user.mustChangePassword) {
+        navigate('/change-password');
+      } else {
+        navigate('/');
+      }
     } catch (err: any) {
       toast.error(err.response?.data?.message ?? 'Login failed');
     } finally {

@@ -170,6 +170,27 @@ export class ComposeService {
     const replicas = svc.deploy?.replicas ?? 1;
     const image = svc.image ?? 'scratch';
 
+    // ── Mapping Docker Compose → Kubernetes ────────────────────────────────────
+    // Compose `entrypoint` → k8s `command`  (remplace l'ENTRYPOINT de l'image)
+    // Compose `command`    → k8s `args`     (remplace le CMD, garde l'ENTRYPOINT)
+    //
+    // Quand la valeur est une chaîne (ex: "bundle exec rails s -p 3000 -b 0.0.0.0"),
+    // on la découpe en mots.  Ne PAS utiliser ['/bin/sh', '-c', str] ici : l'image
+    // a généralement un entrypoint qui fait `exec "$@"`, il faut des mots séparés.
+    const containerOverrides: Partial<k8s.V1Container> = {};
+
+    if (svc.entrypoint) {
+      containerOverrides.command = Array.isArray(svc.entrypoint)
+        ? svc.entrypoint
+        : svc.entrypoint.trim().split(/\s+/);
+    }
+
+    if (svc.command) {
+      containerOverrides.args = Array.isArray(svc.command)
+        ? svc.command
+        : svc.command.trim().split(/\s+/);
+    }
+
     const deploymentBody: k8s.V1Deployment = {
       apiVersion: 'apps/v1',
       kind: 'Deployment',
@@ -195,11 +216,7 @@ export class ComposeService {
                 ports: ports.map((p) => ({ containerPort: p, protocol: 'TCP' })),
                 envFrom: Object.keys(envData).length > 0 ? [{ secretRef: { name: secretName } }] : [],
                 volumeMounts,
-                ...(Array.isArray(svc.command)
-                  ? { command: svc.command }
-                  : svc.command
-                    ? { command: [svc.command] }
-                    : {}),
+                ...containerOverrides,
               },
             ],
             volumes,
