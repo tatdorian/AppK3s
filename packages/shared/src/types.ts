@@ -1,4 +1,6 @@
-export type AppType = 'docker-image' | 'compose' | 'github';
+export type AppType = 'docker-image' | 'compose' | 'github' | 'git' | 'github-app';
+export type BuildType = 'nixpacks' | 'dockerfile' | 'docker-compose' | 'static';
+export type GitProvider = 'github' | 'gitlab';
 
 export type AppStatus = 'idle' | 'deploying' | 'running' | 'stopped' | 'error';
 
@@ -37,12 +39,27 @@ export interface Application {
   image?: string;
   imageTag: string;
   composeContent?: string;
-  // GitHub source (type === 'github')
+  // GitHub source (type === 'github') — legacy PAT mode
   githubUrl?: string;
   githubToken?: string;
   githubUsername?: string;
   githubBranch?: string;
   githubComposePath?: string;
+  // Coolify-like git build (type === 'git')
+  gitSourceId?: string | null;
+  gitRepoUrl?: string | null;
+  gitBranch?: string | null;
+  buildType?: BuildType | null;
+  buildDir?: string | null;
+  dockerfilePath?: string | null;
+  installCommand?: string | null;
+  buildCommand?: string | null;
+  startCommand?: string | null;
+  publishDir?: string | null;
+  webhookSecret?: string | null;
+  autoDeploy?: boolean;
+  lastCommitSha?: string | null;
+  lastCommitMessage?: string | null;
   envVars: EnvVar[];
   ports: Port[];
   volumes: Volume[];
@@ -55,6 +72,9 @@ export interface Application {
   memoryLimit?: string;
   /** Overrides the Docker CMD (keeps ENTRYPOINT). Used for images that need explicit server args (e.g. MinIO). */
   args?: string[];
+  // GitHub App deployment fields
+  githubInstallationId?: string | null;
+  githubRepoFullName?: string | null;
   projectId?: string;
   createdAt: string;
   updatedAt: string;
@@ -68,8 +88,52 @@ export interface Deployment {
   status: DeploymentStatus;
   logs: string;
   error?: string;
+  commitSha?: string | null;
+  commitMessage?: string | null;
+  imageTag?: string | null;
   createdAt: string;
   completedAt?: string;
+}
+
+// ── Git Sources ───────────────────────────────────────────────────────────────
+
+export interface GitSource {
+  id: string;
+  userId: string;
+  provider: GitProvider;
+  name: string;
+  providerId?: string | null;
+  username?: string | null;
+  avatarUrl?: string | null;
+  scopes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GitRepo {
+  id: number;
+  name: string;
+  fullName: string;
+  description?: string | null;
+  private: boolean;
+  url: string;
+  defaultBranch: string;
+  updatedAt: string;
+}
+
+export interface GitBranch {
+  name: string;
+  sha: string;
+  protected: boolean;
+}
+
+export interface DetectedBuild {
+  buildType: BuildType;
+  language?: string;
+  confidence: 'high' | 'medium' | 'low';
+  hasDockerfile: boolean;
+  hasDockerCompose: boolean;
+  nixpacksLanguage?: string;
 }
 
 export interface User {
@@ -145,6 +209,13 @@ export interface ClusterSettings {
   smtpPass: string;
   smtpFrom: string;
   smtpSecure: string;
+  // GitHub OAuth
+  githubClientId: string;
+  githubClientSecret: string;
+  // GitLab OAuth
+  gitlabClientId: string;
+  gitlabClientSecret: string;
+  gitlabBaseUrl: string;
 }
 
 export type AppRole = 'owner' | 'editor' | 'viewer';
@@ -179,6 +250,8 @@ export interface Project {
   id: string;
   name: string;
   description?: string | null;
+  /** Domaine wildcard spécifique à ce projet, ex: "proj-a.example.com" */
+  wildcardDomain?: string | null;
   createdAt: string;
   updatedAt: string;
   appCount?: number;
@@ -206,6 +279,64 @@ export interface ApiError {
   error: string;
   message: string;
   statusCode: number;
+}
+
+// ── GitHub App ────────────────────────────────────────────────────────────────
+
+export interface GithubAppInfo {
+  id: string;
+  appId: number;
+  slug: string;
+  name: string;
+  htmlUrl: string | null;
+  installUrl: string;
+  createdAt: string;
+}
+
+export interface GithubInstallation {
+  id: string;
+  installationId: number;
+  userId: string | null;
+  accountLogin: string;
+  accountType: string;
+  accountAvatarUrl: string | null;
+  repositorySelection: string;
+  suspended: boolean;
+  createdAt: string;
+}
+
+// ── Global Roles ──────────────────────────────────────────────────────────────
+
+export type GlobalRole = 'super-admin' | 'admin' | 'member' | 'viewer';
+
+/** Returns true if the role has global (non-project-scoped) admin access */
+export function isGlobalAdminRole(role: string): boolean {
+  return role === 'super-admin' || role === 'admin';
+}
+
+// ── S3 Storage ────────────────────────────────────────────────────────────────
+
+export interface S3Storage {
+  id: string;
+  name: string;
+  description?: string | null;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  /** Only returned by GET /:id (edit form) */
+  accessKey?: string;
+  /** Only returned by GET /:id (edit form) */
+  secretKey?: string;
+  pathStyle: boolean;
+  isDefault: boolean;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface S3TestResult {
+  ok: boolean;
+  message: string;
 }
 
 // ── API Keys ──────────────────────────────────────────────────────────────────

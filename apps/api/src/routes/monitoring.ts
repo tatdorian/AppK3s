@@ -19,10 +19,13 @@ const createAlertSchema = z.object({
 const updateAlertSchema = createAlertSchema.partial();
 
 // Helper: parse Kubernetes resource quantity to a number
+// Kubernetes metrics-server reports CPU in nanocores ("154321134n"),
+// while allocatable uses millicores ("2000m") or whole cores ("2").
 function parseCpuMillicores(cpu: string | null | undefined): number {
   if (!cpu) return 0;
-  if (cpu.endsWith('m')) return parseInt(cpu.slice(0, -1), 10);
-  return parseFloat(cpu) * 1000;
+  if (cpu.endsWith('n')) return parseInt(cpu.slice(0, -1), 10) / 1_000_000; // nanocores → millicores
+  if (cpu.endsWith('m')) return parseInt(cpu.slice(0, -1), 10);             // millicores
+  return parseFloat(cpu) * 1000;                                             // whole cores
 }
 
 function parseMemoryBytes(mem: string | null | undefined): number {
@@ -78,7 +81,7 @@ export async function monitoringRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: 'Not Found', message: 'Application not found' });
     }
 
-    if (role !== 'admin') {
+    if (role !== 'super-admin' && role !== 'admin') {
       const membership = await db.query.appPermissions.findFirst({
         where: and(
           eq(schema.appPermissions.appId, application.id),

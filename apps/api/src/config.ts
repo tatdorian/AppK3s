@@ -19,6 +19,13 @@ const schema = z.object({
     .string()
     .optional()
     .transform((v) => v === 'true'),
+  // GitHub OAuth (fallback — can also be set via DB settings table)
+  GITHUB_CLIENT_ID: z.string().optional(),
+  GITHUB_CLIENT_SECRET: z.string().optional(),
+  // GitLab OAuth
+  GITLAB_CLIENT_ID: z.string().optional(),
+  GITLAB_CLIENT_SECRET: z.string().optional(),
+  GITLAB_BASE_URL: z.string().default('https://gitlab.com'),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -45,5 +52,14 @@ export const config = {
     pass: env.SMTP_PASS,
     from: env.SMTP_FROM,
     secure: env.SMTP_SECURE,
+  },
+  github: {
+    clientId: env.GITHUB_CLIENT_ID,
+    clientSecret: env.GITHUB_CLIENT_SECRET,
+  },
+  gitlab: {
+    clientId: env.GITLAB_CLIENT_ID,
+    clientSecret: env.GITLAB_CLIENT_SECRET,
+    baseUrl: env.GITLAB_BASE_URL,
   },
 } as const;

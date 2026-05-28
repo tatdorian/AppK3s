@@ -6,7 +6,9 @@ import {
   applyClusterIssuerDns01,
   applyWildcardCert,
   deleteWildcardCert,
+  deleteInterfaceCert,
   updateCoreDnsOverride,
+  updateInterfaceCoreDns,
   updateAppK3sIngress,
   migrateAppIngresses,
 } from '../services/domain.service.js';
@@ -71,8 +73,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   // GET /api/settings
   fastify.get('/', auth, async () => getAll());
 
-  // PATCH /api/settings
+  // PATCH /api/settings — super-admin only
   fastify.patch('/', auth, async (request, reply) => {
+    if (request.user.role !== 'super-admin') {
+      return reply.code(403).send({ error: 'Forbidden', message: 'Super-admin requis pour modifier les paramètres' });
+    }
     const body = request.body as Record<string, string>;
     if (typeof body !== 'object' || body === null) {
       return reply.code(400).send({ error: 'Invalid body' });
@@ -116,13 +121,25 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         await updateCoreDnsOverride(after.wildcardDomain, masterNodeIp);
       }
 
-      // ── 2. Ingress AppK3s (interface) ─────────────────────────────────────
+      // ── 2. Interface domain CoreDNS override ──────────────────────────────
+      // Le domaine de l'interface doit résoudre vers masterNodeIp depuis
+      // l'intérieur du cluster pour que le challenge HTTP-01 LE fonctionne.
+      if (after.interfaceDomain && (ifaceDomChanged || masterIpChanged || !before.interfaceDomain)) {
+        await updateInterfaceCoreDns(after.interfaceDomain, masterNodeIp);
+      }
+
+      // ── 3. Ingress AppK3s (interface) ─────────────────────────────────────
       // Re-créé avec TLS + redirect HTTPS si le domaine ou l'IP changent.
       if (after.interfaceDomain && (ifaceDomChanged || masterIpChanged || !before.interfaceDomain)) {
+        // Si le domaine a changé, supprimer l'ancien cert + secret TLS pour que
+        // cert-manager génère un nouveau certificat Let's Encrypt pour le nouveau domaine.
+        if (ifaceDomChanged && before.interfaceDomain) {
+          await deleteInterfaceCert();
+        }
         await updateAppK3sIngress(after.interfaceDomain, masterNodeIp);
       }
 
-      // ── 3. OVH + wildcard cert (nécessite les credentials OVH) ───────────
+      // ── 4. OVH + wildcard cert (nécessite les credentials OVH) ───────────
       if (ovhReady) {
         // 3a. OVH Secret dans le namespace cert-manager
         if (after.ovhAppKey !== before.ovhAppKey ||

@@ -13,6 +13,8 @@ const app = Fastify({
       ? { target: 'pino-pretty', options: { colorize: true } }
       : undefined,
   },
+  // Enable rawBody for webhook signature validation
+  // (add addContentTypeParser for raw body access in webhook routes)
 });
 
 async function bootstrap() {

@@ -78,6 +78,27 @@
       "when": 1749100000000,
       "tag": "0010_features",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1748300000000,
+      "tag": "0013_coolify_build",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1748500000000,
+      "tag": "0016_github_oauth",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1748600000000,
+      "tag": "0017_per_user_github_app",
+      "breakpoints": true
     }
   ]
 }

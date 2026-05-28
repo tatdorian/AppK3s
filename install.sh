@@ -132,6 +132,28 @@ else
   ok "PM2 $(pm2 --version) déjà présent"
 fi
 
+# ── Nixpacks (build de repos git) ────────────────────────────────────────────
+if ! command -v nixpacks &>/dev/null; then
+  info "Installation de nixpacks (build auto-détection)…"
+  curl -sSL https://nixpacks.com/install.sh | bash >/dev/null 2>&1 || \
+    npm install -g @nixpacks/nixpacks --silent 2>/dev/null || true
+  if command -v nixpacks &>/dev/null; then
+    ok "nixpacks $(nixpacks --version 2>/dev/null || echo 'installé') installé"
+  else
+    warn "nixpacks non installé — les builds Nixpacks utiliseront Docker comme fallback"
+  fi
+else
+  ok "nixpacks $(nixpacks --version 2>/dev/null || echo '') déjà présent"
+fi
+
+# ── git (nécessaire pour cloner les repos) ────────────────────────────────────
+if ! command -v git &>/dev/null; then
+  apt-get install -y -qq git
+  ok "git installé"
+else
+  ok "git $(git --version) déjà présent"
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ÉTAPE 4 — k3s (Kubernetes léger)
 # ═════════════════════════════════════════════════════════════════════════════

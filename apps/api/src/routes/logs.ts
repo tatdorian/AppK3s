@@ -6,8 +6,8 @@ import { KubernetesService } from '../services/kubernetes.service.js';
 const k8s = new KubernetesService();
 
 export async function logsRoutes(app: FastifyInstance) {
-  // GET /api/apps/:id/logs  (last N lines, no stream)
-  app.get<{ Params: { id: string }; Querystring: { tail?: number } }>(
+  // GET /api/apps/:id/logs — static tail (last N lines)
+  app.get<{ Params: { id: string }; Querystring: { tail?: number; pod?: string } }>(
     '/:id/logs',
     { preHandler: app.authenticate },
     async (request, reply) => {
@@ -18,32 +18,32 @@ export async function logsRoutes(app: FastifyInstance) {
 
       try {
         const pods = await k8s.listPods(application);
-        if (!pods.length) return { logs: '' };
+        if (!pods.length) return { logs: '', pods: [] };
+
+        const podName = request.query.pod ?? pods[0].name;
         const logs = await k8s.getPodLogs(
           application.namespace,
-          pods[0].name,
-          request.query.tail ?? 200,
+          podName,
+          request.query.tail ?? 500,
         );
-        return { logs };
+        return { logs, pods: pods.map((p) => p.name) };
       } catch (err: any) {
-        return { logs: '', error: err.message };
+        return { logs: '', pods: [], error: err.message };
       }
     },
   );
 
-  // WS /api/apps/:id/logs/stream
+  // WS /api/apps/:id/logs/stream — real-time streaming with pod selection
   app.get<{ Params: { id: string } }>(
     '/:id/logs/stream',
     { websocket: true },
     async (socket, request) => {
-      // Verify JWT from query param (browsers can't set WS headers)
       const token = (request.query as any).token as string | undefined;
       if (!token) {
         socket.send(JSON.stringify({ type: 'error', data: 'Missing token' }));
         socket.close();
         return;
       }
-
       try {
         app.jwt.verify(token);
       } catch {
@@ -61,31 +61,69 @@ export async function logsRoutes(app: FastifyInstance) {
         return;
       }
 
-      let cleanup: (() => void) | undefined;
+      // Track all active stream cleanups (one per pod being watched)
+      const cleanups: Array<() => void> = [];
+      let closed = false;
 
-      try {
-        const pods = await k8s.listPods(application);
-        if (!pods.length) {
-          socket.send(JSON.stringify({ type: 'info', data: 'No pods running' }));
-          return;
+      const send = (type: string, data: string, pod?: string) => {
+        if (socket.readyState === 1) {
+          socket.send(JSON.stringify({ type, data, pod }));
         }
+      };
 
-        cleanup = await k8s.streamPodLogs(
-          application.namespace,
-          pods[0].name,
-          (line: string) => {
-            if (socket.readyState === 1 /* OPEN */) {
-              socket.send(JSON.stringify({ type: 'log', data: line }));
-            }
-          },
-        );
-      } catch (err: any) {
-        socket.send(JSON.stringify({ type: 'error', data: err.message }));
-      }
+      const startStreaming = async (podFilter?: string) => {
+        // Stop previous streams
+        cleanups.splice(0).forEach((fn) => fn());
+
+        try {
+          const pods = await k8s.listPods(application);
+          if (!pods.length) {
+            send('info', 'No running pods');
+            return;
+          }
+
+          // Send available pod list so the client can render a selector
+          send('pods', JSON.stringify(pods.map((p) => p.name)));
+
+          const targetPods = podFilter
+            ? pods.filter((p) => p.name === podFilter)
+            : pods;
+
+          if (!targetPods.length) {
+            send('info', `Pod "${podFilter}" not found`);
+            return;
+          }
+
+          for (const pod of targetPods) {
+            if (closed) break;
+            const cleanup = await k8s.streamPodLogs(
+              application.namespace,
+              pod.name,
+              (line: string) => send('log', line, pod.name),
+            );
+            cleanups.push(cleanup);
+          }
+        } catch (err: any) {
+          send('error', err.message);
+        }
+      };
+
+      // Handle client messages (e.g. switch pod)
+      socket.on('message', async (raw: Buffer) => {
+        try {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === 'select-pod') {
+            await startStreaming(msg.pod || undefined);
+          }
+        } catch { /* ignore malformed messages */ }
+      });
 
       socket.on('close', () => {
-        cleanup?.();
+        closed = true;
+        cleanups.splice(0).forEach((fn) => fn());
       });
+
+      await startStreaming((request.query as any).pod);
     },
   );
 }

@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Play, Square, RotateCcw, Trash2, Globe, Container, ExternalLink } from 'lucide-react';
+import { Play, Square, RotateCcw, Trash2, Globe, Container, ExternalLink, Loader2 } from 'lucide-react';
 import type { Application } from '@appk3s/shared';
 import { StatusBadge } from './StatusBadge.js';
 import { relativeTime } from '../lib/utils.js';
@@ -9,11 +10,16 @@ import toast from 'react-hot-toast';
 
 interface Props {
   app: Application;
+  /** Affiche le bouton de suppression — la suppression est gérée en interne */
+  showDelete?: boolean;
+  /** @deprecated Utiliser showDelete. Callback appelé après suppression réussie. */
   onDelete?: (id: string) => void;
 }
 
-export function AppCard({ app, onDelete }: Props) {
+export function AppCard({ app, showDelete, onDelete }: Props) {
+  const canDelete = showDelete || !!onDelete;
   const qc = useQueryClient();
+  const [confirmDel, setConfirmDel] = useState(false);
 
   const onSuccess = (label: string) => () => {
     qc.invalidateQueries({ queryKey: ['apps'] });
@@ -44,6 +50,26 @@ export function AppCard({ app, onDelete }: Props) {
     onSuccess: onSuccess('Deployment started'),
     onError: onError('Deploy'),
   });
+
+  const deleteMut = useMutation({
+    mutationFn: () => appsApi.delete(app.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['apps'] });
+      toast.success(`${app.name} supprimée`);
+      onDelete?.(app.id);
+    },
+    onError: onError('Delete'),
+  });
+
+  const handleDeleteClick = () => {
+    if (!confirmDel) {
+      setConfirmDel(true);
+      setTimeout(() => setConfirmDel(false), 3000);
+    } else {
+      deleteMut.mutate();
+      setConfirmDel(false);
+    }
+  };
 
   const hostname =
     app.subdomain && app.domain ? `${app.subdomain}.${app.domain}` : null;
@@ -119,13 +145,23 @@ export function AppCard({ app, onDelete }: Props) {
               <Square className="w-3.5 h-3.5 text-yellow-400" />
             </button>
           )}
-          {onDelete && (
+          {canDelete && (
             <button
-              className="btn-ghost p-1.5"
-              title="Delete"
-              onClick={() => onDelete(app.id)}
+              className={`p-1.5 rounded-lg text-xs flex items-center gap-1 transition-all font-medium ${
+                confirmDel
+                  ? 'bg-red-500/20 text-red-400 border border-red-500/40 animate-pulse'
+                  : 'text-slate-400 hover:text-red-400 hover:bg-red-500/10'
+              }`}
+              title={confirmDel ? 'Cliquez à nouveau pour confirmer' : 'Supprimer'}
+              onClick={handleDeleteClick}
+              disabled={deleteMut.isPending}
             >
-              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+              {deleteMut.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="w-3.5 h-3.5" />
+              )}
+              {confirmDel && <span className="pr-0.5">Confirmer?</span>}
             </button>
           )}
         </div>

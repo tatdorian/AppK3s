@@ -24,6 +24,7 @@ import { settingsApi, usersApi } from '../lib/api.js';
 import type { ClusterSettings, User } from '@appk3s/shared';
 import toast from 'react-hot-toast';
 import axios from 'axios';
+import { PasswordStrength, isPasswordValid } from '../components/PasswordStrength.js';
 
 // ─── Password input with show/hide toggle ───────────────────────────────────
 function PasswordInput({
@@ -64,15 +65,15 @@ function PasswordInput({
 function CreateUserModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [role, setRole] = useState<'viewer' | 'admin'>('viewer');
+  const [emailSent, setEmailSent] = useState(false);
 
   const createMut = useMutation({
-    mutationFn: () => usersApi.create({ email, password, role }),
+    mutationFn: () => usersApi.create({ email, role }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] });
-      toast.success('Utilisateur créé');
-      onClose();
+      setEmailSent(true);
+      setTimeout(() => onClose(), 2500);
     },
     onError: (err: { response?: { data?: { message?: string } } }) =>
       toast.error(err?.response?.data?.message ?? 'Échec de la création'),
@@ -85,48 +86,67 @@ function CreateUserModal({ onClose }: { onClose: () => void }) {
           <UserPlus className="w-4 h-4 text-accent" /> Créer un utilisateur
         </h2>
 
-        <div>
-          <label className="label">Email</label>
-          <input
-            className="input"
-            type="email"
-            placeholder="user@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            autoComplete="off"
-          />
-        </div>
+        {emailSent ? (
+          <div className="flex flex-col items-center gap-3 py-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-emerald-500/15 flex items-center justify-center">
+              <Mail className="w-6 h-6 text-emerald-400" />
+            </div>
+            <div>
+              <p className="text-white font-medium">Invitation envoyée !</p>
+              <p className="text-slate-400 text-sm mt-1">
+                Un email a été envoyé à <strong className="text-white">{email}</strong> avec un lien pour définir son mot de passe.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div>
+              <label className="label">Email</label>
+              <input
+                className="input"
+                type="email"
+                placeholder="user@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoFocus
+                autoComplete="off"
+              />
+            </div>
 
-        <div>
-          <label className="label">Mot de passe</label>
-          <PasswordInput value={password} onChange={setPassword} autoComplete="new-password" />
-        </div>
+            <div>
+              <label className="label">Rôle</label>
+              <select className="input" value={role} onChange={(e) => setRole(e.target.value as 'viewer' | 'admin')}>
+                <option value="viewer">Membre</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
 
-        <div>
-          <label className="label">Rôle</label>
-          <select className="input" value={role} onChange={(e) => setRole(e.target.value as 'viewer' | 'admin')}>
-            <option value="viewer">Viewer</option>
-            <option value="admin">Admin</option>
-          </select>
-        </div>
+            <div className="flex items-start gap-2.5 p-3 rounded-lg bg-accent/5 border border-accent/20">
+              <Mail className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Un email sera envoyé avec un lien pour définir le mot de passe.
+              </p>
+            </div>
 
-        <div className="flex justify-end gap-2 pt-2">
-          <button className="btn-ghost" onClick={onClose}>
-            Annuler
-          </button>
-          <button
-            className="btn-primary"
-            disabled={!email || !password || createMut.isPending}
-            onClick={() => createMut.mutate()}
-          >
-            {createMut.isPending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <UserPlus className="w-4 h-4" />
-            )}
-            Créer
-          </button>
-        </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button className="btn-ghost" onClick={onClose}>
+                Annuler
+              </button>
+              <button
+                className="btn-primary"
+                disabled={!email || createMut.isPending}
+                onClick={() => createMut.mutate()}
+              >
+                {createMut.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <UserPlus className="w-4 h-4" />
+                )}
+                Créer et inviter
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -144,6 +164,8 @@ function ChangePasswordModal({
 }) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+
+  const pwValid = isPasswordValid(newPassword);
 
   const changeMut = useMutation({
     mutationFn: () =>
@@ -185,6 +207,7 @@ function ChangePasswordModal({
             onChange={setNewPassword}
             autoComplete="new-password"
           />
+          <PasswordStrength password={newPassword} />
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
@@ -193,7 +216,7 @@ function ChangePasswordModal({
           </button>
           <button
             className="btn-primary"
-            disabled={!newPassword || (isSelf && !currentPassword) || changeMut.isPending}
+            disabled={!pwValid || (isSelf && !currentPassword) || changeMut.isPending}
             onClick={() => changeMut.mutate()}
           >
             {changeMut.isPending ? (
@@ -322,23 +345,15 @@ function WildcardSection({
   onSave: (data: Partial<ClusterSettings>) => void;
   saving: boolean;
 }) {
-  const [wildcardDomain, setWildcardDomain] = useState('');
   const [interfaceDomain, setInterfaceDomain] = useState('');
   const [masterNodeIp, setMasterNodeIp] = useState('');
   const [acmeEmail, setAcmeEmail] = useState('');
-  const [ovhAppKey, setOvhAppKey] = useState('');
-  const [ovhAppSecret, setOvhAppSecret] = useState('');
-  const [ovhConsumerKey, setOvhConsumerKey] = useState('');
 
   useEffect(() => {
     if (!settings) return;
-    setWildcardDomain(settings.wildcardDomain ?? '');
     setInterfaceDomain(settings.interfaceDomain ?? '');
     setMasterNodeIp(settings.masterNodeIp ?? '');
     setAcmeEmail(settings.acmeEmail ?? '');
-    setOvhAppKey(settings.ovhAppKey ?? '');
-    setOvhAppSecret(settings.ovhAppSecret ?? '');
-    setOvhConsumerKey(settings.ovhConsumerKey ?? '');
   }, [settings]);
 
   const { data: certStatus, refetch: refetchCert, isFetching: certFetching } = useQuery({
@@ -349,55 +364,32 @@ function WildcardSection({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave({ wildcardDomain, interfaceDomain, masterNodeIp, acmeEmail, ovhAppKey, ovhAppSecret, ovhConsumerKey });
+    onSave({ interfaceDomain, masterNodeIp, acmeEmail });
   };
-
-  const ovhDocsUrl = 'https://api.ovh.com/createApp/';
-  const ovhTokenUrl = wildcardDomain
-    ? `https://api.ovh.com/auth/?credentialType=applicationKey&applicationId=<APP_ID>&redirection=https://${wildcardDomain}`
-    : 'https://api.ovh.com/auth/';
 
   return (
     <form onSubmit={handleSave}>
       <div className="card p-5 space-y-5">
         <div className="flex items-center gap-2">
           <Globe className="w-4 h-4 text-accent" />
-          <h2 className="text-sm font-semibold text-white">Wildcard & TLS automatique</h2>
+          <h2 className="text-sm font-semibold text-white">Domaine & TLS</h2>
         </div>
         <p className="text-xs text-slate-500 -mt-3">
-          Toutes les apps partagent un seul certificat wildcard Let's Encrypt via DNS-01 (OVH).
-          Changer le domaine met à jour automatiquement tous les ingresses.
+          Configuration du domaine de l'interface AK3s et des certificats TLS.
+          Le domaine wildcard se configure dans les <strong className="text-slate-400">paramètres de chaque projet</strong>.
         </p>
 
-        {/* Domains + IP master */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="label flex items-center gap-1">
-              <Globe className="w-3 h-3" /> Domaine wildcard
-            </label>
-            <input
-              className="input"
-              placeholder="w0.app.syit.fr"
-              value={wildcardDomain}
-              onChange={(e) => setWildcardDomain(e.target.value.trim())}
-            />
-            {wildcardDomain && (
-              <p className="text-xs text-accent mt-1">
-                Apps sous : *.{wildcardDomain}
-              </p>
-            )}
-          </div>
-          <div>
-            <label className="label flex items-center gap-1">
-              <Lock className="w-3 h-3" /> Domaine interface AppK3s
-            </label>
-            <input
-              className="input"
-              placeholder="appk3s.w0.app.syit.fr"
-              value={interfaceDomain}
-              onChange={(e) => setInterfaceDomain(e.target.value.trim())}
-            />
-          </div>
+        {/* Interface domain */}
+        <div>
+          <label className="label flex items-center gap-1">
+            <Lock className="w-3 h-3" /> Domaine interface AK3s
+          </label>
+          <input
+            className="input"
+            placeholder="ak3s.apps.example.com"
+            value={interfaceDomain}
+            onChange={(e) => setInterfaceDomain(e.target.value.trim())}
+          />
         </div>
 
         {/* Master node IP */}
@@ -412,9 +404,8 @@ function WildcardSection({
             onChange={(e) => setMasterNodeIp(e.target.value.trim())}
           />
           <p className="text-xs text-slate-500 mt-1">
-            Tous les sous-domaines de <code>{wildcardDomain || 'votre-domaine'}</code> résoudront
-            vers cette IP au sein du cluster — nécessaire pour la validation ACME HTTP-01.
-            Changer cette valeur met à jour CoreDNS et reconfigure l'ingress de l'interface.
+            Tous les sous-domaines résoudront vers cette IP au sein du cluster —
+            nécessaire pour la validation ACME HTTP-01.
           </p>
         </div>
 
@@ -430,65 +421,28 @@ function WildcardSection({
           />
         </div>
 
-        {/* OVH credentials */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <label className="label mb-0">Credentials OVH API</label>
-            <a
-              href={ovhDocsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-accent hover:underline"
-            >
-              Créer une application OVH →
-            </a>
-          </div>
-          <div className="grid grid-cols-1 gap-2">
-            <div>
-              <label className="label text-xs text-slate-500">Application Key</label>
-              <PasswordInput value={ovhAppKey} onChange={setOvhAppKey} placeholder="AK_xxxxxxxxxxxxxxxx" />
-            </div>
-            <div>
-              <label className="label text-xs text-slate-500">Application Secret</label>
-              <PasswordInput value={ovhAppSecret} onChange={setOvhAppSecret} placeholder="AS_xxxxxxxxxxxxxxxx" />
-            </div>
-            <div>
-              <label className="label text-xs text-slate-500">Consumer Key</label>
-              <PasswordInput value={ovhConsumerKey} onChange={setOvhConsumerKey} placeholder="CK_xxxxxxxxxxxxxxxx" />
-            </div>
-          </div>
-          <p className="text-xs text-slate-600">
-            Le Consumer Key doit avoir les droits GET/POST/PUT/DELETE sur <code>/domain/zone/*</code>.{' '}
-            <a href={ovhTokenUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-              Générer un token →
-            </a>
-          </p>
-        </div>
-
         {/* Cert status */}
-        {wildcardDomain && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-surface-100 border border-slate-700/40">
-            {certFetching ? (
-              <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-            ) : certStatus?.ready ? (
-              <CheckCircle2 className="w-4 h-4 text-green-400" />
-            ) : (
-              <XCircle className="w-4 h-4 text-red-400" />
-            )}
-            <span className="text-xs text-slate-300 flex-1">
-              {certStatus?.ready
-                ? `Certificat *.${wildcardDomain} actif`
-                : certStatus?.message || 'Certificat en attente…'}
-            </span>
-            <button
-              type="button"
-              onClick={() => refetchCert()}
-              className="text-slate-500 hover:text-slate-200"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-surface-100 border border-slate-700/40">
+          {certFetching ? (
+            <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+          ) : certStatus?.ready ? (
+            <CheckCircle2 className="w-4 h-4 text-green-400" />
+          ) : (
+            <XCircle className="w-4 h-4 text-red-400" />
+          )}
+          <span className="text-xs text-slate-300 flex-1">
+            {certStatus?.ready
+              ? 'Certificat TLS actif'
+              : certStatus?.message || 'Certificat en attente ou non configuré'}
+          </span>
+          <button
+            type="button"
+            onClick={() => refetchCert()}
+            className="text-slate-500 hover:text-slate-200"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+        </div>
 
         <div className="flex justify-end pt-1">
           <button type="submit" className="btn-primary" disabled={saving}>
@@ -614,7 +568,7 @@ function SmtpSection({
           <label className="label">From address</label>
           <input
             className="input"
-            placeholder="AppK3s <noreply@example.com>"
+            placeholder="AK3s <noreply@example.com>"
             value={smtpFrom}
             onChange={(e) => setSmtpFrom(e.target.value.trim())}
           />
@@ -672,11 +626,125 @@ function SmtpSection({
   );
 }
 
+// ── OAuth section (GitHub / GitLab) ──────────────────────────────────────────
+function OAuthSection({
+  settings,
+  onSave,
+  saving,
+}: {
+  settings: ClusterSettings | undefined;
+  onSave: (data: Partial<ClusterSettings>) => void;
+  saving: boolean;
+}) {
+  const [githubClientId, setGithubClientId] = useState('');
+  const [githubClientSecret, setGithubClientSecret] = useState('');
+  const [gitlabClientId, setGitlabClientId] = useState('');
+  const [gitlabClientSecret, setGitlabClientSecret] = useState('');
+  const [gitlabBaseUrl, setGitlabBaseUrl] = useState('https://gitlab.com');
+
+  useEffect(() => {
+    if (!settings) return;
+    setGithubClientId((settings as any).githubClientId ?? '');
+    setGithubClientSecret((settings as any).githubClientSecret ?? '');
+    setGitlabClientId((settings as any).gitlabClientId ?? '');
+    setGitlabClientSecret((settings as any).gitlabClientSecret ?? '');
+    setGitlabBaseUrl((settings as any).gitlabBaseUrl ?? 'https://gitlab.com');
+  }, [settings]);
+
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSave({
+      githubClientId,
+      githubClientSecret,
+      gitlabClientId,
+      gitlabClientSecret,
+      gitlabBaseUrl,
+    } as any);
+  };
+
+  return (
+    <form onSubmit={handleSave}>
+      <div className="card p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <KeyRound className="w-4 h-4 text-accent" />
+          <h2 className="text-sm font-semibold text-white">OAuth GitHub & GitLab</h2>
+        </div>
+        <p className="text-xs text-slate-500 -mt-2">
+          Configurez les applications OAuth pour permettre aux utilisateurs de connecter leurs comptes GitHub/GitLab.
+          Créez une <strong className="text-slate-400">OAuth App</strong> dans les paramètres développeur de GitHub/GitLab et entrez les credentials ici.
+        </p>
+
+        {/* GitHub */}
+        <div className="space-y-3">
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">GitHub</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Client ID</label>
+              <input
+                className="input"
+                placeholder="Ov23ct..."
+                value={githubClientId}
+                onChange={(e) => setGithubClientId(e.target.value.trim())}
+              />
+            </div>
+            <div>
+              <label className="label">Client Secret</label>
+              <PasswordInput value={githubClientSecret} onChange={setGithubClientSecret} placeholder="••••••••••••••••••••" />
+            </div>
+          </div>
+          <p className="text-xs text-slate-600">
+            Callback URL à enregistrer : <code className="text-slate-500">{window.location.origin}/api/git/github/callback</code>
+          </p>
+        </div>
+
+        {/* GitLab */}
+        <div className="space-y-3 pt-2 border-t border-slate-700/30">
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">GitLab</p>
+          <div>
+            <label className="label">URL GitLab</label>
+            <input
+              className="input"
+              placeholder="https://gitlab.com"
+              value={gitlabBaseUrl}
+              onChange={(e) => setGitlabBaseUrl(e.target.value.trim())}
+            />
+            <p className="text-xs text-slate-600 mt-1">Laissez la valeur par défaut pour GitLab.com</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Application ID</label>
+              <input
+                className="input"
+                placeholder="1234567890abcdef..."
+                value={gitlabClientId}
+                onChange={(e) => setGitlabClientId(e.target.value.trim())}
+              />
+            </div>
+            <div>
+              <label className="label">Secret</label>
+              <PasswordInput value={gitlabClientSecret} onChange={setGitlabClientSecret} placeholder="gloas-••••••••••••" />
+            </div>
+          </div>
+          <p className="text-xs text-slate-600">
+            Callback URL à enregistrer : <code className="text-slate-500">{window.location.origin}/api/git/gitlab/callback</code>
+          </p>
+        </div>
+
+        <div className="flex justify-end pt-2">
+          <button type="submit" className="btn-primary text-sm" disabled={saving}>
+            {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Sauvegarde…</> : <><Save className="w-4 h-4" /> Sauvegarder OAuth</>}
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export function SettingsPage() {
   const { user } = useAuthStore();
   const qc = useQueryClient();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
 
   const { data: settings, isLoading: settingsLoading } = useQuery({
     queryKey: ['settings'],
@@ -741,7 +809,7 @@ export function SettingsPage() {
         </div>
       </div>
 
-      {/* Wildcard & TLS — most important section */}
+      {/* Domaine interface & TLS */}
       <WildcardSection
         settings={settings}
         onSave={(data) => saveMut.mutate(data)}
@@ -811,6 +879,13 @@ export function SettingsPage() {
         saving={saveMut.isPending}
       />
 
+      {/* GitHub / GitLab OAuth */}
+      <OAuthSection
+        settings={settings}
+        onSave={(data) => saveMut.mutate(data)}
+        saving={saveMut.isPending}
+      />
+
       {/* User management (admin only) */}
       {isAdmin && (
         <div className="card p-5 space-y-4">
@@ -854,7 +929,7 @@ export function SettingsPage() {
       <div className="card p-5 space-y-3">
         <h2 className="text-sm font-semibold text-white">Cluster k8s</h2>
         <p className="text-sm text-slate-400">
-          AppK3s se connecte à votre cluster k3s via le service account in-cluster lors
+          AK3s se connecte à votre cluster k3s via le service account in-cluster lors
           d'un déploiement dans le cluster, ou via{' '}
           <code className="text-accent">~/.kube/config</code> en développement local.
         </p>

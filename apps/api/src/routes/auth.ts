@@ -1,8 +1,18 @@
 import type { FastifyInstance } from 'fastify';
+import * as crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { eq, count } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { loginSchema, registerSchema } from '@appk3s/shared';
+import { config } from '../config.js';
+import { getGithubApp, decryptValue } from '../services/github-app.service.js';
+
+function isStrongPassword(pw: string): { ok: boolean; message: string } {
+  if (pw.length < 8) return { ok: false, message: 'Le mot de passe doit comporter au moins 8 caractères' };
+  if (!/[A-Z]/.test(pw) || !/[a-z]/.test(pw)) return { ok: false, message: 'Le mot de passe doit contenir au moins une majuscule et une minuscule' };
+  if (!/[0-9]/.test(pw) && !/[^A-Za-z0-9]/.test(pw)) return { ok: false, message: 'Le mot de passe doit contenir au moins un chiffre ou un caractère spécial' };
+  return { ok: true, message: '' };
+}
 
 export async function authRoutes(app: FastifyInstance) {
   // POST /api/auth/login
@@ -49,8 +59,8 @@ export async function authRoutes(app: FastifyInstance) {
       // Require auth for subsequent registrations
       try {
         await request.jwtVerify();
-        if (request.user.role !== 'admin') {
-          return reply.code(403).send({ error: 'Forbidden', message: 'Admin only' });
+        if (request.user.role !== 'super-admin') {
+          return reply.code(403).send({ error: 'Forbidden', message: 'Super-admin requis' });
         }
       } catch {
         return reply.code(403).send({ error: 'Forbidden', message: 'Registration closed' });
@@ -67,11 +77,30 @@ export async function authRoutes(app: FastifyInstance) {
     const passwordHash = await bcrypt.hash(body.data.password, 12);
     const [user] = await db
       .insert(schema.users)
-      .values({ email: body.data.email, passwordHash, role: userCount === 0 ? 'admin' : 'viewer' })
+      .values({ email: body.data.email, passwordHash, role: userCount === 0 ? 'super-admin' : 'member' })
       .returning({ id: schema.users.id, email: schema.users.email, role: schema.users.role });
 
     const token = app.jwt.sign({ sub: user.id, email: user.email, role: user.role });
     return reply.code(201).send({ token, user });
+  });
+
+  // GET /api/auth/github — initiate GitHub App OAuth login
+  app.get('/github', async (request, reply) => {
+    const githubApp = await getGithubApp();
+    if (!githubApp) {
+      return reply.redirect('/login?error=github_app_not_configured');
+    }
+
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const hmac = crypto.createHmac('sha256', config.jwtSecret).update(nonce).digest('hex');
+    const state = `${nonce}.${hmac}`;
+
+    const url = new URL('https://github.com/login/oauth/authorize');
+    url.searchParams.set('client_id', githubApp.clientId);
+    url.searchParams.set('scope', 'user:email');
+    url.searchParams.set('state', state);
+
+    return reply.redirect(url.toString());
   });
 
   // GET /api/auth/setup-status — public, no auth required
@@ -88,5 +117,70 @@ export async function authRoutes(app: FastifyInstance) {
       columns: { passwordHash: false },
     });
     return user;
+  });
+
+  // GET /api/auth/setup-password/check?token=xxx
+  // Public — validates that a setup token is still valid, returns the associated email
+  app.get<{ Querystring: { token?: string } }>('/setup-password/check', async (request, reply) => {
+    const { token } = request.query;
+    if (!token) return reply.code(400).send({ error: 'Validation', message: 'token required' });
+
+    const user = await db.query.users.findFirst({
+      where: eq(schema.users.setupToken, token),
+    });
+
+    if (!user || !user.setupToken || user.setupToken !== token) {
+      return reply.code(404).send({ error: 'Not Found', message: 'Token invalide ou expiré' });
+    }
+    if (user.setupTokenExpiresAt && new Date() > user.setupTokenExpiresAt) {
+      return reply.code(410).send({ error: 'Gone', message: 'Ce lien a expiré. Demandez à un administrateur d\'en générer un nouveau.' });
+    }
+
+    return { valid: true, email: user.email };
+  });
+
+  // POST /api/auth/setup-password
+  // Public — consumes setup token, sets password, returns JWT
+  app.post<{ Body: { token: string; password: string } }>('/setup-password', async (request, reply) => {
+    const { token, password } = request.body as { token: string; password: string };
+
+    if (!token || !password) {
+      return reply.code(400).send({ error: 'Validation', message: 'token and password required' });
+    }
+
+    const strength = isStrongPassword(password);
+    if (!strength.ok) {
+      return reply.code(400).send({ error: 'Validation', message: strength.message });
+    }
+
+    const user = await db.query.users.findFirst({
+      where: eq(schema.users.setupToken, token),
+    });
+
+    if (!user || !user.setupToken || user.setupToken !== token) {
+      return reply.code(404).send({ error: 'Not Found', message: 'Token invalide ou expiré' });
+    }
+    if (user.setupTokenExpiresAt && new Date() > user.setupTokenExpiresAt) {
+      return reply.code(410).send({ error: 'Gone', message: 'Ce lien a expiré. Demandez à un administrateur d\'en générer un nouveau.' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    // Set password and clear the setup token (one-time use)
+    await db.update(schema.users)
+      .set({
+        passwordHash,
+        setupToken: null,
+        setupTokenExpiresAt: null,
+        mustChangePassword: false,
+      })
+      .where(eq(schema.users.id, user.id));
+
+    const jwtToken = app.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+
+    return reply.code(200).send({
+      token: jwtToken,
+      user: { id: user.id, email: user.email, role: user.role, mustChangePassword: false },
+    });
   });
 }

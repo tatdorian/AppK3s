@@ -22,11 +22,11 @@ export function Layout() {
                 </div>
                 <span className="text-xs text-slate-400 hidden sm:block">{user.email}</span>
                 <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                  user.role === 'admin'
+                  user.role === 'admin' || user.role === 'super-admin'
                     ? 'bg-accent/15 text-accent'
                     : 'bg-slate-700 text-slate-400'
                 }`}>
-                  {user.role === 'admin' ? 'Admin' : 'Utilisateur'}
+                  {user.role === 'super-admin' ? 'Super Admin' : user.role === 'admin' ? 'Admin' : 'Utilisateur'}
                 </span>
               </div>
             )}

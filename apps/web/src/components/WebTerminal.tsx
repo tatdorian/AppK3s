@@ -20,15 +20,23 @@ export function WebTerminal({ appId, pod, container }: Props) {
   const [connState, setConnState] = useState<ConnState>('connecting');
   const [errorMsg, setErrorMsg] = useState('');
 
+  function disconnect() {
+    wsRef.current?.close();
+    wsRef.current = null;
+  }
+
   function connect() {
     if (!termRef.current) return;
     setConnState('connecting');
     setErrorMsg('');
 
-    // Clean up existing terminal instance
+    // Dispose and clean up existing terminal instance + DOM
     if (termInstance.current) {
       termInstance.current.dispose();
+      termInstance.current = null;
     }
+    // Clear stale xterm DOM elements
+    termRef.current.innerHTML = '';
 
     const term = new Terminal({
       cursorBlink: true,
@@ -53,7 +61,12 @@ export function WebTerminal({ appId, pod, container }: Props) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(termRef.current);
-    fit.fit();
+
+    // Fit après que le DOM soit peint (RAF évite les dimensions à 0)
+    requestAnimationFrame(() => {
+      fit.fit();
+      term.focus();
+    });
 
     termInstance.current = term;
     fitAddon.current = fit;
@@ -70,8 +83,9 @@ export function WebTerminal({ appId, pod, container }: Props) {
 
     ws.onopen = () => {
       setConnState('connected');
-      term.writeln('\x1b[1;32mConnected to pod: \x1b[0;36m' + pod + '\x1b[0m');
+      term.writeln('\x1b[1;32mConnecté au pod : \x1b[0;36m' + pod + '\x1b[0m');
       term.writeln('');
+      term.focus();
     };
 
     ws.onmessage = (event) => {
@@ -84,59 +98,51 @@ export function WebTerminal({ appId, pod, container }: Props) {
         if (msg.type === 'data') {
           term.write(msg.data);
         } else if (msg.type === 'error') {
-          term.writeln(`\x1b[1;31mError: ${msg.data}\x1b[0m`);
+          term.writeln(`\x1b[1;31mErreur : ${msg.data}\x1b[0m`);
           setConnState('error');
           setErrorMsg(msg.data);
         } else if (msg.type === 'exit') {
-          term.writeln(`\r\n\x1b[1;33mSession ended (${msg.data})\x1b[0m`);
+          term.writeln(`\r\n\x1b[1;33mSession terminée (${msg.data})\x1b[0m`);
           setConnState('disconnected');
         }
       } catch {
-        // Raw text
         term.write(event.data);
       }
     };
 
     ws.onclose = () => {
-      setConnState((prev) => prev === 'connected' ? 'disconnected' : prev);
+      setConnState((prev) => (prev === 'connected' ? 'disconnected' : prev));
     };
 
     ws.onerror = () => {
       setConnState('error');
-      setErrorMsg('WebSocket connection failed');
+      setErrorMsg('Connexion WebSocket échouée');
     };
 
-    // Send input from terminal to backend
+    // Envoie la frappe (y compris Tab) au backend
     term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'input', data }));
       }
     });
 
-    // Handle resize
+    // Resize observer
     const resizeObserver = new ResizeObserver(() => {
-      fit.fit();
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'resize',
-          cols: term.cols,
-          rows: term.rows,
-        }));
-      }
+      requestAnimationFrame(() => {
+        fit.fit();
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }),
+          );
+        }
+      });
     });
 
-    if (termRef.current) {
-      resizeObserver.observe(termRef.current);
-    }
+    resizeObserver.observe(termRef.current);
 
     return () => {
       resizeObserver.disconnect();
     };
-  }
-
-  function disconnect() {
-    wsRef.current?.close();
-    wsRef.current = null;
   }
 
   useEffect(() => {
@@ -147,6 +153,7 @@ export function WebTerminal({ appId, pod, container }: Props) {
       termInstance.current?.dispose();
       termInstance.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appId, pod, container]);
 
   return (
@@ -164,10 +171,10 @@ export function WebTerminal({ appId, pod, container }: Props) {
             }`}
           />
           <span className="text-slate-400">
-            {connState === 'connected' && `Connected — ${pod}`}
-            {connState === 'connecting' && 'Connecting…'}
-            {connState === 'disconnected' && 'Disconnected'}
-            {connState === 'error' && `Error: ${errorMsg}`}
+            {connState === 'connected' && `Connecté — ${pod}`}
+            {connState === 'connecting' && 'Connexion en cours…'}
+            {connState === 'disconnected' && 'Déconnecté'}
+            {connState === 'error' && `Erreur : ${errorMsg}`}
           </span>
         </div>
         {(connState === 'disconnected' || connState === 'error') && (
@@ -178,30 +185,36 @@ export function WebTerminal({ appId, pod, container }: Props) {
               connect();
             }}
           >
-            <RefreshCw className="w-3 h-3" /> Reconnect
+            <RefreshCw className="w-3 h-3" /> Reconnecter
           </button>
         )}
       </div>
 
-      {/* Terminal container */}
-      <div ref={termRef} className="w-full" style={{ height: 'calc(100% - 32px)', padding: '8px' }} />
+      {/* Terminal container — tabIndex permet la mise au point clavier */}
+      <div
+        ref={termRef}
+        className="w-full outline-none"
+        style={{ height: 'calc(100% - 32px)', padding: '8px' }}
+        tabIndex={0}
+        onFocus={() => termInstance.current?.focus()}
+      />
 
-      {/* Overlay for connecting state */}
+      {/* Overlay connecting */}
       {connState === 'connecting' && (
         <div className="absolute inset-0 bg-[#0f172a]/80 flex items-center justify-center">
           <div className="flex flex-col items-center gap-3 text-slate-400">
             <Loader2 className="w-8 h-8 animate-spin" />
-            <span className="text-sm">Connecting to {pod}…</span>
+            <span className="text-sm">Connexion à {pod}…</span>
           </div>
         </div>
       )}
 
-      {/* Overlay for disconnected state */}
+      {/* Overlay disconnected */}
       {connState === 'disconnected' && (
         <div className="absolute inset-0 bg-[#0f172a]/70 flex items-center justify-center">
           <div className="flex flex-col items-center gap-3 text-slate-400">
             <WifiOff className="w-8 h-8" />
-            <span className="text-sm">Session ended</span>
+            <span className="text-sm">Session terminée</span>
             <button
               className="btn-primary text-sm"
               onClick={() => {
@@ -209,7 +222,7 @@ export function WebTerminal({ appId, pod, container }: Props) {
                 connect();
               }}
             >
-              <RefreshCw className="w-4 h-4" /> Reconnect
+              <RefreshCw className="w-4 h-4" /> Reconnecter
             </button>
           </div>
         </div>

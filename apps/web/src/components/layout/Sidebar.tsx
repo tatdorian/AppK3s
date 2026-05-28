@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Boxes, Settings, Server, Network, Users, Shield,
-  Key, BarChart2, Bell,
+  LayoutDashboard, Boxes, Settings, Network, Users, Shield,
+  Key, BarChart2, Bell, Github, HardDrive,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.js';
 import { cn } from '../../lib/utils.js';
+import { TigerBadge } from '../TigerLogo.js';
 
 // Navigation visible à tous les utilisateurs authentifiés
 const baseNav = [
@@ -14,6 +15,8 @@ const baseNav = [
 
 // Outils disponibles pour tous les utilisateurs authentifiés
 const toolsNav = [
+  { to: '/github-app',    icon: Github,    label: 'GitHub App' },
+  { to: '/s3',            icon: HardDrive, label: 'S3 Storage' },
   { to: '/monitoring',    icon: BarChart2, label: 'Monitoring' },
   { to: '/notifications', icon: Bell,      label: 'Notifications' },
   { to: '/api-keys',      icon: Key,       label: 'Clés API' },
@@ -49,16 +52,14 @@ function NavItem({ to, icon: Icon, label, end = false }: { to: string; icon: Rea
 
 export function Sidebar() {
   const user = useAuthStore((s) => s.user);
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
 
   return (
     <aside className="w-52 shrink-0 h-screen flex flex-col bg-surface-100 border-r border-slate-700/50">
       {/* Brand */}
       <div className="h-12 flex items-center gap-2.5 px-4 border-b border-slate-700/50">
-        <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
-          <Server className="w-3.5 h-3.5 text-white" />
-        </div>
-        <span className="font-bold text-white tracking-tight text-sm">AppK3s</span>
+        <TigerBadge size="sm" />
+        <span className="font-bold text-white tracking-tight text-sm">AK3s</span>
       </div>
 
       {/* Nav */}

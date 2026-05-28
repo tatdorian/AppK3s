@@ -14,7 +14,8 @@ import {
 // Note: boolean is still used by applications.tlsEnabled
 import type { EnvVar, Port, Volume } from '@appk3s/shared';
 
-export const appTypeEnum = pgEnum('app_type', ['docker-image', 'compose', 'github']);
+export const appTypeEnum = pgEnum('app_type', ['docker-image', 'compose', 'github', 'git', 'github-app']);
+export const buildTypeEnum = pgEnum('build_type', ['nixpacks', 'dockerfile', 'docker-compose', 'static']);
 export const appStatusEnum = pgEnum('app_status', [
   'idle',
   'deploying',
@@ -36,6 +37,11 @@ export const users = pgTable('users', {
   role: varchar('role', { length: 50 }).notNull().default('admin'),
   // true → user must change password before accessing the app
   mustChangePassword: boolean('must_change_password').notNull().default(false),
+  // token sent by email to let a new user set their password (one-time use, 7 days TTL)
+  setupToken: varchar('setup_token', { length: 255 }),
+  setupTokenExpiresAt: timestamp('setup_token_expires_at'),
+  // GitHub App OAuth — links a GitHub account to this user
+  githubId: varchar('github_id', { length: 255 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -53,12 +59,32 @@ export const applications = pgTable('applications', {
   // Compose
   composeContent: text('compose_content'),
 
-  // GitHub source (type === 'github')
+  // GitHub source (type === 'github') — legacy PAT mode
   githubUrl: text('github_url'),
   githubToken: text('github_token'),
   githubUsername: varchar('github_username', { length: 255 }),
   githubBranch: varchar('github_branch', { length: 255 }).default('main'),
   githubComposePath: varchar('github_compose_path', { length: 500 }).default('docker-compose.yml'),
+
+  // ── GitHub App deployment (type === 'github-app') ───────────────────────
+  githubInstallationId: uuid('github_installation_id'),
+  githubRepoFullName: text('github_repo_full_name'),
+
+  // ── Coolify-like Git build fields (type === 'git') ──────────────────────
+  gitSourceId: uuid('git_source_id').references(() => gitSources.id, { onDelete: 'set null' }),
+  gitRepoUrl: text('git_repo_url'),
+  gitBranch: varchar('git_branch', { length: 255 }).default('main'),
+  buildType: buildTypeEnum('build_type'),            // nixpacks | dockerfile | docker-compose | static
+  buildDir: varchar('build_dir', { length: 500 }).default('.'),
+  dockerfilePath: varchar('dockerfile_path', { length: 500 }).default('Dockerfile'),
+  installCommand: text('install_command'),
+  buildCommand: text('build_command'),
+  startCommand: text('start_command'),
+  publishDir: varchar('publish_dir', { length: 500 }).default('public'), // static builds
+  webhookSecret: varchar('webhook_secret', { length: 255 }),
+  autoDeploy: boolean('auto_deploy').notNull().default(false),
+  lastCommitSha: varchar('last_commit_sha', { length: 40 }),
+  lastCommitMessage: text('last_commit_message'),
 
   // Runtime config
   envVars: json('env_vars').$type<EnvVar[]>().notNull().default([]),
@@ -99,6 +125,10 @@ export const deployments = pgTable('deployments', {
   status: deploymentStatusEnum('status').notNull().default('pending'),
   logs: text('logs').notNull().default(''),
   error: text('error'),
+  // Git metadata (for traceability & rollback)
+  commitSha: varchar('commit_sha', { length: 40 }),
+  commitMessage: text('commit_message'),
+  imageTag: varchar('image_tag', { length: 500 }),  // e.g. appk3s/myapp:abc123def
   createdAt: timestamp('created_at').defaultNow().notNull(),
   completedAt: timestamp('completed_at'),
 });
@@ -124,12 +154,32 @@ export const appPermissions = pgTable(
   },
 );
 
+// ── Git Sources (OAuth connections) ──────────────────────────────────────────
+
+export const gitSources = pgTable('git_sources', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: varchar('provider', { length: 20 }).notNull(), // 'github' | 'gitlab'
+  name: varchar('name', { length: 255 }).notNull(),
+  providerId: varchar('provider_id', { length: 255 }),
+  username: varchar('username', { length: 255 }),
+  avatarUrl: text('avatar_url'),
+  accessToken: text('access_token').notNull(), // encrypted
+  refreshToken: text('refresh_token'),         // GitLab only
+  tokenExpiresAt: timestamp('token_expires_at'),
+  scopes: text('scopes'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 // ── Projects ─────────────────────────────────────────────────────────────────
 
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 255 }).notNull(),
   description: text('description'),
+  /** Domaine wildcard propre au projet, ex: "proj-a.example.com" — surcharge le wildcard global */
+  wildcardDomain: varchar('wildcard_domain', { length: 255 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -231,3 +281,36 @@ export type DbNotificationChannel = typeof notificationChannels.$inferSelect;
 export type DbAlertRule = typeof alertRules.$inferSelect;
 export type DbBackupConfig = typeof backupConfigs.$inferSelect;
 export type DbBackupRun = typeof backupRuns.$inferSelect;
+export type DbGitSource = typeof gitSources.$inferSelect;
+
+// ── S3 Storages ───────────────────────────────────────────────────────────────
+export const s3Storages = pgTable('s3_storages', {
+  id:          uuid('id').primaryKey().defaultRandom(),
+  name:        varchar('name', { length: 255 }).notNull(),
+  description: text('description'),
+  endpoint:    text('endpoint').notNull(),
+  region:      varchar('region', { length: 100 }).notNull().default('us-east-1'),
+  bucket:      varchar('bucket', { length: 255 }).notNull(),
+  accessKey:   text('access_key').notNull(),   // encrypted
+  secretKey:   text('secret_key').notNull(),   // encrypted
+  pathStyle:   boolean('path_style').notNull().default(false),
+  isDefault:   boolean('is_default').notNull().default(false),
+  createdBy:   uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
+});
+
+export type DbS3Storage = typeof s3Storages.$inferSelect;
+
+// GitHub App — tables gérées via raw SQL (schema Drizzle non requis pour ces tables)
+export interface DbGithubInstallation {
+  id: string;
+  installationId: number;
+  userId: string | null;
+  accountLogin: string;
+  accountType: string;
+  accountAvatarUrl: string | null;
+  repositorySelection: string;
+  suspended: boolean;
+  createdAt: Date;
+}

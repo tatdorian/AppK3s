@@ -124,9 +124,30 @@ export class KubernetesService {
         : {}),
     };
 
+    // Built images are pushed to the local registry (192.168.188.10:5000).
+    // All nodes pull from there, so IfNotPresent works cluster-wide.
+    const imagePullPolicy = 'IfNotPresent';
+
+    // Inject PORT env var for source-built apps (nixpacks/git/github-app) so the
+    // runtime respects the configured container port. Only injected when the user
+    // hasn't already set PORT in their env vars.
+    const extraEnv: k8s.V1EnvVar[] = [];
+    const isSourceBuild = app.type === 'github-app' || app.type === 'git';
+    if (isSourceBuild && containerPorts.length > 0) {
+      const userSetPort = app.envVars.some((e) => e.key === 'PORT');
+      if (!userSetPort) {
+        extraEnv.push({ name: 'PORT', value: String(containerPorts[0].containerPort) });
+      }
+    }
+
     const spec: k8s.V1DeploymentSpec = {
       replicas: app.replicas,
       selector: { matchLabels: { 'app.kubernetes.io/name': name } },
+      // Rolling update for zero-downtime deployments
+      strategy: {
+        type: 'RollingUpdate',
+        rollingUpdate: { maxSurge: 1, maxUnavailable: 0 },
+      },
       template: {
         metadata: { labels },
         spec: {
@@ -134,10 +155,38 @@ export class KubernetesService {
             {
               name: app.name,
               image: `${app.image}:${app.imageTag ?? 'latest'}`,
+              imagePullPolicy,
               ports: containerPorts,
               envFrom,
+              env: extraEnv.length > 0 ? extraEnv : undefined,
               volumeMounts,
               resources,
+              // Startup probe — blocks liveness/readiness until the app is up.
+              // Gives up to 5 minutes for slow starts (nixpacks, JVM, etc.).
+              // Once the startup probe passes, liveness/readiness take over.
+              startupProbe: containerPorts.length > 0 ? {
+                tcpSocket: { port: containerPorts[0].containerPort as any },
+                initialDelaySeconds: 5,
+                periodSeconds: 10,
+                failureThreshold: 30, // 5 min max startup window
+                timeoutSeconds: 3,
+              } : undefined,
+              // Liveness probe — restart if app hangs after startup.
+              livenessProbe: containerPorts.length > 0 ? {
+                tcpSocket: { port: containerPorts[0].containerPort as any },
+                initialDelaySeconds: 0,
+                periodSeconds: 15,
+                failureThreshold: 4,
+                timeoutSeconds: 3,
+              } : undefined,
+              // Readiness probe — remove from Service endpoints if unhealthy.
+              readinessProbe: containerPorts.length > 0 ? {
+                tcpSocket: { port: containerPorts[0].containerPort as any },
+                initialDelaySeconds: 0,
+                periodSeconds: 10,
+                failureThreshold: 4,
+                timeoutSeconds: 3,
+              } : undefined,
               // Override Docker CMD when the template requires explicit server args
               // (e.g. MinIO needs ["server", "/data", "--console-address", ":9001"])
               ...(app.args && app.args.length > 0 ? { args: app.args } : {}),
@@ -250,6 +299,49 @@ export class KubernetesService {
     namespace: string,
   ): Promise<void> {
     const certName = secretName; // même nom que le secret TLS
+
+    // ── Réutiliser le secret existant si déjà valide ─────────────────────────
+    // Let's Encrypt limite à 5 certs identiques / 7 jours.
+    // Si le secret TLS existe déjà pour ce host, on laisse cert-manager le
+    // gérer (renouvellement) sans en redemander un nouveau.
+    try {
+      const secretRes = await this.coreApi.readNamespacedSecret(secretName, namespace);
+      const secret = secretRes.body;
+      const certData = secret.data?.['tls.crt'];
+      if (certData) {
+        // Décoder le PEM et vérifier la date d'expiration
+        const pem = Buffer.from(certData, 'base64').toString('utf8');
+        // Extraire la date d'expiration grossièrement (valable uniquement comme heuristique)
+        // cert-manager se charge du renouvellement automatique — on s'assure juste que
+        // le secret est présent et non vide.
+        const existingCertIsUsable = pem.includes('-----BEGIN CERTIFICATE-----');
+        if (existingCertIsUsable) {
+          // Secret valide — vérifier que le Certificate CRD couvre bien le host demandé
+          try {
+            const certRes: any = await this.customApi.getNamespacedCustomObject(
+              'cert-manager.io', 'v1', namespace, 'certificates', certName,
+            );
+            const existingDnsNames: string[] = certRes?.body?.spec?.dnsNames ?? [];
+            if (existingDnsNames.includes(host)) {
+              // CRD couvre déjà ce host → cert-manager gère le renouvellement, rien à faire
+              return;
+            }
+            // Le host a changé (ex: subdomain modifié) → ne pas retourner,
+            // continuer vers replaceNamespacedCustomObject pour mettre à jour les dnsNames.
+            // cert-manager détectera le changement et ré-émettra automatiquement.
+            // On supprime aussi l'ancien secret pour forcer la ré-émission immédiate.
+            try {
+              await this.coreApi.deleteNamespacedSecret(secretName, namespace);
+            } catch { /* déjà supprimé ou absent */ }
+          } catch {
+            // Pas de Certificate CRD mais le secret est là → créer le CRD
+            // cert-manager détectera le secret existant et ne ré-émettra pas
+          }
+        }
+      }
+    } catch {
+      // Secret absent → flux normal de création
+    }
 
     const certBody = {
       apiVersion: 'cert-manager.io/v1',
@@ -517,9 +609,12 @@ export class KubernetesService {
       this.coreApi.deleteNamespacedService(app.name, ns).catch(ignore404),
       this.networkingApi.deleteNamespacedIngress(`${app.name}-ingress`, ns).catch(ignore404),
       this.coreApi.deleteNamespacedSecret(`${app.name}-env`, ns).catch(ignore404),
-      // Supprimer le Certificate cert-manager + le secret TLS associé
+      // Supprimer uniquement le Certificate CRD — PAS le secret TLS.
+      // Let's Encrypt limite à 5 certificats identiques / 7 jours.
+      // Conserver le secret permet de le réutiliser si l'app est recréée
+      // avec le même sous-domaine sans redemander un cert à Let's Encrypt.
       this.deleteCertificate(`${app.name}-tls`, ns),
-      this.coreApi.deleteNamespacedSecret(`${app.name}-tls`, ns).catch(ignore404),
+      // ⚠️  NE PAS faire : this.coreApi.deleteNamespacedSecret(`${app.name}-tls`, ns)
       ...app.volumes.map((v) =>
         this.coreApi
           .deleteNamespacedPersistentVolumeClaim(`${app.name}-${v.name}`, ns)

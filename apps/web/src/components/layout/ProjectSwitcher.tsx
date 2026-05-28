@@ -9,7 +9,7 @@ import type { Project } from '@appk3s/shared';
 
 export function ProjectSwitcher() {
   const { user } = useAuthStore();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
   const { currentProjectId, setCurrentProject } = useProjectStore();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

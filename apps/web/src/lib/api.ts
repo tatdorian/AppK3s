@@ -18,6 +18,12 @@ import type {
   AlertRule,
   BackupConfig,
   BackupRun,
+  GitSource,
+  GitRepo,
+  GitBranch,
+  DetectedBuild,
+  S3Storage,
+  S3TestResult,
 } from '@appk3s/shared';
 
 const http = axios.create({
@@ -90,6 +96,12 @@ export const appsApi = {
   deployments: (id: string) =>
     http.get<Deployment[]>(`/api/apps/${id}/deployments`).then((r) => r.data),
 
+  rollback: (id: string, imageTag: string) =>
+    http.post<Deployment>(`/api/apps/${id}/rollback`, { imageTag }).then((r) => r.data),
+
+  setupWebhook: (id: string) =>
+    http.post<{ secret: string; webhookUrl: string }>(`/api/apps/${id}/webhook/setup`).then((r) => r.data),
+
   // Rôle de l'utilisateur courant sur cette app
   getMyRole: (id: string) =>
     http.get<AppMyRole>(`/api/apps/${id}/my-role`).then((r) => r.data),
@@ -142,7 +154,7 @@ export const projectsApi = {
   create: (data: { name: string; description?: string }) =>
     http.post<import('@appk3s/shared').Project>('/api/projects', data).then((r) => r.data),
 
-  update: (id: string, data: { name?: string; description?: string }) =>
+  update: (id: string, data: { name?: string; description?: string; wildcardDomain?: string }) =>
     http.patch<import('@appk3s/shared').Project>(`/api/projects/${id}`, data).then((r) => r.data),
 
   delete: (id: string) => http.delete(`/api/projects/${id}`),
@@ -162,8 +174,8 @@ export const projectsApi = {
     http.get<{ role: 'owner' | 'member' | 'viewer' | null; isAdmin: boolean }>(`/api/projects/${id}/my-role`).then((r) => r.data),
 
   /** Crée un nouveau compte utilisateur et l'ajoute directement au projet */
-  createUser: (projectId: string, data: { email: string; password: string; projectRole: string }) =>
-    http.post<{ user: { id: string; email: string; role: string }; membership: unknown }>(
+  createUser: (projectId: string, data: { email: string; projectRole: string }) =>
+    http.post<{ user: { id: string; email: string; role: string; emailSent?: boolean }; membership: unknown }>(
       `/api/projects/${projectId}/users`,
       data,
     ).then((r) => r.data),
@@ -174,8 +186,12 @@ export const projectsApi = {
 export const usersApi = {
   list: () => http.get<User[]>('/api/users').then((r) => r.data),
 
-  create: (data: { email: string; password: string; role?: 'admin' | 'viewer' }) =>
-    http.post<User>('/api/users', data).then((r) => r.data),
+  create: (data: {
+    email: string;
+    role?: 'admin' | 'viewer';
+    projects?: 'all' | Array<{ projectId: string; projectRole: string }>;
+  }) =>
+    http.post<User & { emailSent?: boolean; projectsAssigned?: number }>('/api/users', data).then((r) => r.data),
 
   update: (id: string, data: { email?: string; role?: string; password?: string; currentPassword?: string }) =>
     http.patch<User>(`/api/users/${id}`, data).then((r) => r.data),
@@ -292,9 +308,147 @@ export const backupsApi = {
     http.post<{ ok: boolean; message: string }>(`/api/backups/${id}/run`).then((r) => r.data),
 };
 
+// ─── Git Sources ─────────────────────────────────────────────────────────────
+
+export const gitApi = {
+  /** List git sources for the current user. */
+  listSources: () =>
+    http.get<GitSource[]>('/api/git').then((r) => r.data),
+
+  /** Add a PAT-based git source (no OAuth). */
+  addSource: (data: { provider: string; name: string; accessToken: string; baseUrl?: string }) =>
+    http.post<GitSource>('/api/git/sources', data).then((r) => r.data),
+
+  /** Delete a git source. */
+  deleteSource: (id: string) => http.delete(`/api/git/${id}`),
+
+  /**
+   * Fetch the GitHub OAuth URL (authenticated call) then redirect the browser.
+   * Returns the URL so the caller can do window.location.href = url.
+   */
+  getGithubOAuthUrl: () =>
+    http.get<{ url: string }>('/api/git/github/oauth-url').then((r) => r.data.url),
+
+  /**
+   * Fetch the GitLab OAuth URL (authenticated call) then redirect the browser.
+   */
+  getGitlabOAuthUrl: () =>
+    http.get<{ url: string }>('/api/git/gitlab/oauth-url').then((r) => r.data.url),
+
+  /** List repos for a source. */
+  listRepos: (sourceId: string, page = 1) =>
+    http.get<GitRepo[]>(`/api/git/${sourceId}/repos?page=${page}`).then((r) => r.data),
+
+  /** List branches for a repo. */
+  listBranches: (sourceId: string, repo: string) =>
+    http.get<GitBranch[]>(`/api/git/${sourceId}/branches?repo=${encodeURIComponent(repo)}`).then((r) => r.data),
+
+  /** Auto-detect build type from repo tree. */
+  detectBuild: (sourceId: string, repo: string, branch = 'main') =>
+    http.get<DetectedBuild>(`/api/git/${sourceId}/detect?repo=${encodeURIComponent(repo)}&branch=${branch}`).then((r) => r.data),
+
+  /** Setup webhook on GitHub/GitLab for auto-deploy. */
+  setupWebhook: (appId: string) =>
+    http.post<{ ok: boolean; hookId: number; webhookUrl: string }>('/api/git/webhook/setup', { appId }).then((r) => r.data),
+};
+
+// ─── GitHub App API ───────────────────────────────────────────────────────────
+
+import type { GithubAppInfo, GithubInstallation } from '@appk3s/shared';
+
+export const githubAppApi = {
+  /** Get GitHub App info (admin). */
+  getApp: () => http.get<GithubAppInfo>('/api/github-app').then((r) => r.data),
+
+  /** Get manifest data to build the form. */
+  getManifestData: () =>
+    http.get<{ manifest: string; githubUrl: string; state: string }>('/api/github-app/manifest-data').then((r) => r.data),
+
+  /** Delete the GitHub App (admin). */
+  deleteApp: () => http.delete('/api/github-app'),
+
+  /** Get GitHub install URL. */
+  getInstallUrl: () =>
+    http.get<{ url: string }>('/api/github-app/install-url').then((r) => r.data.url),
+
+  /** Register an installation after the user installs the app on GitHub. */
+  registerInstallation: (installationId: number) =>
+    http.post<{ id: string; installationId: number; login: string }>(
+      '/api/github-app/installations',
+      { installationId },
+    ).then((r) => r.data),
+
+  /** List all installations. */
+  listInstallations: () =>
+    http.get<GithubInstallation[]>('/api/github-app/installations').then((r) => r.data),
+
+  /** Delete an installation. */
+  deleteInstallation: (id: string) => http.delete(`/api/github-app/installations/${id}`),
+
+  /** List repos accessible via an installation. */
+  listRepos: (installationId: string) =>
+    http.get<GitRepo[]>(`/api/github-app/installations/${installationId}/repos`).then((r) => r.data),
+
+  /** List branches for a repo. */
+  listBranches: (installationId: string, repo: string) =>
+    http.get<GitBranch[]>(`/api/github-app/installations/${installationId}/branches?repo=${encodeURIComponent(repo)}`).then((r) => r.data),
+
+  /** Auto-detect build type. */
+  detectBuild: (installationId: string, repo: string, branch = 'main') =>
+    http.get<DetectedBuild>(`/api/github-app/installations/${installationId}/detect?repo=${encodeURIComponent(repo)}&branch=${branch}`).then((r) => r.data),
+};
+
+// ─── S3 Storage ───────────────────────────────────────────────────────────────
+
+export const s3Api = {
+  list: () => http.get<S3Storage[]>('/api/s3').then((r) => r.data),
+
+  get: (id: string) => http.get<S3Storage>(`/api/s3/${id}`).then((r) => r.data),
+
+  create: (data: {
+    name: string;
+    description?: string;
+    endpoint: string;
+    region?: string;
+    bucket: string;
+    accessKey: string;
+    secretKey: string;
+    pathStyle?: boolean;
+  }) => http.post<S3Storage>('/api/s3', data).then((r) => r.data),
+
+  update: (id: string, data: Partial<{
+    name: string;
+    description: string;
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKey: string;
+    secretKey: string;
+    pathStyle: boolean;
+  }>) => http.patch<S3Storage>(`/api/s3/${id}`, data).then((r) => r.data),
+
+  delete: (id: string) => http.delete(`/api/s3/${id}`),
+
+  test: (id: string) => http.post<S3TestResult>(`/api/s3/${id}/test`).then((r) => r.data),
+
+  testConfig: (data: {
+    endpoint: string;
+    region?: string;
+    bucket: string;
+    accessKey: string;
+    secretKey: string;
+    pathStyle?: boolean;
+  }) => http.post<S3TestResult>('/api/s3/test', data).then((r) => r.data),
+
+  setDefault: (id: string) => http.post(`/api/s3/${id}/set-default`).then((r) => r.data),
+};
+
 // ─── WebSocket log stream ─────────────────────────────────────────────────────
 
-export function createLogStream(appId: string, onLine: (line: string) => void): WebSocket {
+export function createLogStream(
+  appId: string,
+  onMessage: (msg: { type: string; data: string; pod?: string }) => void,
+): WebSocket {
   const token = localStorage.getItem('token') ?? '';
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   const host = window.location.host;
@@ -302,12 +456,52 @@ export function createLogStream(appId: string, onLine: (line: string) => void): 
 
   ws.onmessage = (event) => {
     try {
-      const msg = JSON.parse(event.data) as { type: string; data: string };
-      if (msg.type === 'log' || msg.type === 'info') onLine(msg.data);
+      const msg = JSON.parse(event.data) as { type: string; data: string; pod?: string };
+      onMessage(msg);
     } catch {
-      onLine(event.data);
+      onMessage({ type: 'log', data: event.data });
     }
   };
 
   return ws;
+}
+
+/**
+ * Polls a deployment's logs until it completes or a given timeout.
+ * Calls onLine for each new line, onDone when finished.
+ */
+export function pollDeploymentLogs(
+  appId: string,
+  deploymentId: string,
+  onLine: (line: string) => void,
+  onDone: (status: 'success' | 'failed') => void,
+): () => void {
+  let seen = 0;
+  let active = true;
+
+  const poll = async () => {
+    if (!active) return;
+    try {
+      const deployments = await appsApi.deployments(appId);
+      const dep = deployments.find((d) => d.id === deploymentId);
+      if (!dep) return;
+
+      const lines = dep.logs.split('\n').filter(Boolean);
+      for (let i = seen; i < lines.length; i++) {
+        onLine(lines[i]);
+      }
+      seen = lines.length;
+
+      if (dep.status === 'success' || dep.status === 'failed') {
+        onDone(dep.status as 'success' | 'failed');
+        active = false;
+        return;
+      }
+    } catch { /* ignore */ }
+
+    if (active) setTimeout(poll, 1500);
+  };
+
+  poll();
+  return () => { active = false; };
 }

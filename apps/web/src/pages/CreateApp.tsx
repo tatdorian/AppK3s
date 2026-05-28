@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import {
   ChevronLeft, Plus, Minus, FolderOpen, Lock, Search,
-  ChevronDown, ChevronUp, ExternalLink, AlertTriangle, Rocket,
+  ChevronDown, ChevronUp, ExternalLink, AlertTriangle, Rocket, Globe, GitBranch,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useCreateApp } from '../hooks/useApps.js';
@@ -13,8 +13,9 @@ import type { AppTemplate, EnvVar, Port, Volume } from '@appk3s/shared';
 import { CredentialsPanel } from '../components/CredentialsPanel.js';
 import { useAuthStore } from '../store/auth.js';
 import { useProjectStore } from '../store/project.js';
+import { DeployFromGitHub } from './DeployFromGitHub.js';
 
-type AppType = 'docker-image' | 'compose' | 'github';
+type AppType = 'docker-image' | 'compose' | 'github' | 'git' | 'github-app';
 type Step = 'gallery' | 'form';
 
 // ─── Category colours ─────────────────────────────────────────────────────────
@@ -38,6 +39,13 @@ const CAT_LABELS: Record<string, string> = {
 // ─── Custom pseudo-templates ──────────────────────────────────────────────────
 const CUSTOM_CARDS = [
   {
+    id: '__github-deploy',
+    name: 'Déployer depuis GitHub',
+    description: 'Dépôt public ou privé. Nixpacks, Dockerfile, Compose ou Static. Déploiement auto sur push.',
+    icon: '🐙',
+    category: null,
+  },
+  {
     id: '__docker-image',
     name: 'Image Docker',
     description: 'Déployer n\'importe quelle image Docker Hub ou registre privé.',
@@ -47,15 +55,8 @@ const CUSTOM_CARDS = [
   {
     id: '__compose',
     name: 'Docker Compose',
-    description: 'Coller un fichier docker-compose.yml multi-services.',
+    description: 'Collez un fichier docker-compose.yml pour déployer des services multiples.',
     icon: '📄',
-    category: null,
-  },
-  {
-    id: '__github',
-    name: 'GitHub',
-    description: 'Récupérer un docker-compose.yml depuis un dépôt GitHub public ou privé.',
-    icon: '🐙',
     category: null,
   },
 ];
@@ -109,7 +110,7 @@ export function CreateApp() {
   const createMut = useCreateApp();
   const [searchParams] = useSearchParams();
   const { user } = useAuthStore();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
   const { currentProjectId: storeProjectId } = useProjectStore();
 
   // ── Step & template selection ──────────────────────────────────────────────
@@ -129,13 +130,16 @@ export function CreateApp() {
   const [image, setImage]         = useState('');
   const [imageTag, setImageTag]   = useState('latest');
   const [composeContent, setComposeContent] = useState('');
-  // GitHub source state
+  // GitHub source state (legacy PAT)
   const [githubUrl, setGithubUrl]                   = useState('');
   const [githubToken, setGithubToken]               = useState('');
   const [githubUsername, setGithubUsername]         = useState('');
   const [githubBranch, setGithubBranch]             = useState('main');
   const [githubComposePath, setGithubComposePath]   = useState('docker-compose.yml');
   const [githubIsPrivate, setGithubIsPrivate]       = useState(false);
+  // Git deploy (Coolify-like)
+  // gitConfig conservé pour compat (non utilisé dans le nouveau wizard GitHub)
+  const [gitConfig, setGitConfig]                   = useState<Record<string, any> | null>(null); void setGitConfig;
   const [envVars, setEnvVars]     = useState<EnvVar[]>([]);
   const [ports, setPorts]         = useState<Port[]>([]);
   const [volumes, setVolumes]     = useState<Volume[]>([]);
@@ -155,6 +159,13 @@ export function CreateApp() {
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: settingsApi.get });
   const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: projectsApi.list });
 
+  // Fetch selected project to get its wildcardDomain
+  const { data: selectedProject } = useQuery({
+    queryKey: ['projects', projectId],
+    queryFn: () => projectsApi.get(projectId),
+    enabled: !!projectId,
+  });
+
   const { data: myRoleData } = useQuery({
     queryKey: ['projects', projectId, 'my-role'],
     queryFn: () => projectsApi.getMyRole(projectId),
@@ -162,13 +173,37 @@ export function CreateApp() {
   });
   const canSetDomain = isAdmin || myRoleData?.role === 'owner' || !projectId;
 
+  // Liste des wildcards disponibles : global + projet si différent
+  const globalWildcard = settings?.defaultDomain ?? '';
+  const projectWildcard = selectedProject?.wildcardDomain ?? '';
+  const availableWildcards = [
+    ...(globalWildcard ? [{ label: `Global — ${globalWildcard}`, value: globalWildcard }] : []),
+    ...(projectWildcard && projectWildcard !== globalWildcard
+      ? [{ label: `Projet — ${projectWildcard}`, value: projectWildcard }]
+      : []),
+    { label: 'Personnalisé…', value: '__custom' },
+  ];
+  const [domainMode, setDomainMode] = useState<string>(''); // valeur du select
+
   // Pre-fill domain from global settings
   useEffect(() => {
     if (!settings) return;
-    if (!domain && settings.defaultDomain) setDomain(settings.defaultDomain);
     if (settings.defaultIngressClass) setIngressClass(settings.defaultIngressClass);
     if (settings.defaultTls === 'true') setTlsEnabled(true);
+    if (settings.defaultDomain && !domainMode) {
+      setDomainMode(settings.defaultDomain);
+      setDomain(settings.defaultDomain);
+    }
   }, [settings]);
+
+  // Quand le projet change : basculer sur son wildcard s'il en a un
+  useEffect(() => {
+    if (!selectedProject) return;
+    if (selectedProject.wildcardDomain) {
+      setDomainMode(selectedProject.wildcardDomain);
+      setDomain(selectedProject.wildcardDomain);
+    }
+  }, [selectedProject]);
 
   // ── Apply template ─────────────────────────────────────────────────────────
   const applyTemplate = (tpl: AppTemplate | null, customType?: AppType) => {
@@ -237,17 +272,38 @@ export function CreateApp() {
   // ── Submit ─────────────────────────────────────────────────────────────────
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Validation for git type
+    if (type === 'git' && !gitConfig) {
+      alert('Veuillez sélectionner un dépôt git et une branche.');
+      return;
+    }
+
     const app = await createMut.mutateAsync({
       name, namespace, type,
       image: type === 'docker-image' ? image : undefined,
       imageTag,
       composeContent: type === 'compose' ? composeContent : undefined,
-      // GitHub fields
+      // GitHub fields (legacy PAT)
       githubUrl: type === 'github' ? githubUrl : undefined,
       githubToken: type === 'github' && githubIsPrivate && githubToken ? githubToken : undefined,
       githubUsername: type === 'github' && githubIsPrivate && githubUsername ? githubUsername : undefined,
       githubBranch: type === 'github' ? (githubBranch || 'main') : undefined,
       githubComposePath: type === 'github' ? (githubComposePath || 'docker-compose.yml') : undefined,
+      // Git deploy (Coolify-like)
+      ...(type === 'git' && gitConfig ? {
+        gitSourceId: gitConfig.gitSourceId,
+        gitRepoUrl: gitConfig.gitRepoUrl,
+        gitBranch: gitConfig.gitBranch,
+        buildType: gitConfig.buildType,
+        buildDir: gitConfig.buildDir !== '.' ? gitConfig.buildDir : undefined,
+        dockerfilePath: gitConfig.dockerfilePath !== 'Dockerfile' ? gitConfig.dockerfilePath : undefined,
+        installCommand: gitConfig.installCommand || undefined,
+        buildCommand: gitConfig.buildCommand || undefined,
+        startCommand: gitConfig.startCommand || undefined,
+        publishDir: gitConfig.publishDir !== 'public' ? gitConfig.publishDir : undefined,
+        autoDeploy: gitConfig.autoDeploy,
+      } : {}),
       envVars, ports, volumes,
       subdomain: subdomain || undefined,
       domain: domain || undefined,
@@ -324,7 +380,11 @@ export function CreateApp() {
                   name={c.name}
                   description={c.description}
                   category={c.category}
-                  onSelect={() => applyTemplate(null, c.id === '__compose' ? 'compose' : c.id === '__github' ? 'github' : 'docker-image')}
+                  onSelect={() => {
+                    if (c.id === '__github-deploy') applyTemplate(null, 'github-app');
+                    else if (c.id === '__compose') applyTemplate(null, 'compose');
+                    else applyTemplate(null, 'docker-image');
+                  }}
                 />
               ))}
             </div>
@@ -415,7 +475,9 @@ export function CreateApp() {
         ) : (
           <div>
             <h1 className="text-2xl font-bold text-white">
-              {type === 'compose' ? '📄 Docker Compose' : type === 'github' ? '🐙 GitHub' : '🐳 Image Docker'}
+              {(type === 'github-app' || type === 'git') ? '🐙 Déployer depuis GitHub'
+                : type === 'compose' ? '📄 Docker Compose'
+                : '🐳 Image Docker'}
             </h1>
             <p className="text-slate-400 text-sm">Configuration personnalisée</p>
           </div>
@@ -453,141 +515,56 @@ export function CreateApp() {
             </div>
           </div>
 
-          {/* Image / Compose / GitHub source */}
-          {!selectedTemplate && (
+          {/* Compose */}
+          {!selectedTemplate && type === 'compose' && (
             <div>
-              {type === 'docker-image' ? (
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="col-span-2">
-                    <label className="label">Image Docker *</label>
-                    <input
-                      className="input"
-                      placeholder="nginx"
-                      value={image}
-                      onChange={(e) => setImage(e.target.value)}
-                      onBlur={handleImageBlur}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="label">Tag</label>
-                    <input
-                      className="input"
-                      placeholder="latest"
-                      value={imageTag}
-                      onChange={(e) => setImageTag(e.target.value)}
-                    />
-                  </div>
-                </div>
-              ) : type === 'compose' ? (
-                <div>
-                  <label className="label">docker-compose.yml *</label>
-                  <textarea
-                    className="input font-mono text-xs h-48 resize-none"
-                    placeholder={'version: "3"\nservices:\n  web:\n    image: nginx:latest\n    ports:\n      - "80:80"'}
-                    value={composeContent}
-                    onChange={(e) => setComposeContent(e.target.value)}
+              <label className="label">docker-compose.yml *</label>
+              <textarea
+                className="input font-mono text-xs h-56 resize-none"
+                placeholder={'version: "3"\nservices:\n  web:\n    image: nginx:latest\n    ports:\n      - "80:80"'}
+                value={composeContent}
+                onChange={(e) => setComposeContent(e.target.value)}
+                required
+              />
+            </div>
+          )}
+
+          {/* Image Docker */}
+          {!selectedTemplate && type === 'docker-image' && (
+            <div>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="col-span-2">
+                  <label className="label">Image Docker *</label>
+                  <input
+                    className="input"
+                    placeholder="nginx"
+                    value={image}
+                    onChange={(e) => setImage(e.target.value)}
+                    onBlur={handleImageBlur}
                     required
                   />
                 </div>
-              ) : (
-                /* ── GitHub source ── */
-                <div className="space-y-3">
-                  {/* Security warning */}
-                  <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-300 text-xs">
-                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                    <span>
-                      Le token d'accès sera stocké en clair dans la base de données.
-                      Utilisez un token PAT avec des permissions minimales (lecture seule sur le dépôt).
-                    </span>
-                  </div>
-
-                  {/* Repo URL */}
-                  <div>
-                    <label className="label">URL du dépôt GitHub *</label>
-                    <input
-                      className="input"
-                      placeholder="https://github.com/utilisateur/mon-repo"
-                      value={githubUrl}
-                      onChange={(e) => setGithubUrl(e.target.value)}
-                      required
-                    />
-                    <p className="text-xs text-slate-600 mt-1">
-                      Formats acceptés : https://github.com/user/repo ou github.com/user/repo
-                    </p>
-                  </div>
-
-                  {/* Public / Private toggle */}
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setGithubIsPrivate(false)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                        !githubIsPrivate ? 'bg-accent text-white' : 'bg-surface-300 text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      🌐 Public
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setGithubIsPrivate(true)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                        githubIsPrivate ? 'bg-accent text-white' : 'bg-surface-300 text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      🔒 Privé
-                    </button>
-                  </div>
-
-                  {/* Private credentials */}
-                  {githubIsPrivate && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="label">Nom d'utilisateur GitHub</label>
-                        <input
-                          className="input"
-                          placeholder="monlogin"
-                          value={githubUsername}
-                          onChange={(e) => setGithubUsername(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <label className="label">Token d'accès (PAT classique)</label>
-                        <input
-                          className="input"
-                          type="password"
-                          placeholder="ghp_xxxxxxxxxxxx"
-                          value={githubToken}
-                          onChange={(e) => setGithubToken(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Branch + compose path */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="label">Branche</label>
-                      <input
-                        className="input"
-                        placeholder="main"
-                        value={githubBranch}
-                        onChange={(e) => setGithubBranch(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="label">Chemin du fichier compose</label>
-                      <input
-                        className="input"
-                        placeholder="docker-compose.yml"
-                        value={githubComposePath}
-                        onChange={(e) => setGithubComposePath(e.target.value)}
-                      />
-                    </div>
-                  </div>
+                <div>
+                  <label className="label">Tag</label>
+                  <input
+                    className="input"
+                    placeholder="latest"
+                    value={imageTag}
+                    onChange={(e) => setImageTag(e.target.value)}
+                  />
                 </div>
-              )}
+              </div>
             </div>
+          )}
+
+          {/* GitHub deploy wizard — gère son propre cycle de vie et navigue directement */}
+          {!selectedTemplate && (type === 'github-app' || type === 'git') && (
+            <DeployFromGitHub
+              appName={name || 'my-app'}
+              namespace={namespace}
+              projectId={projectId || undefined}
+              onCancel={() => setStep('gallery')}
+            />
           )}
 
           {/* Template: show image/tag readonly */}
@@ -641,6 +618,9 @@ export function CreateApp() {
           </div>
         )}
 
+        {/* ── Sections cachées pour GitHub deploy (le wizard gère tout) ──── */}
+        {(type === 'github-app' || type === 'git') ? null : (<>
+
         {/* ── Variables d'environnement ────────────────────────────────────── */}
         <div className="card p-5 space-y-3">
           <h2 className="text-sm font-semibold text-white">Variables d'environnement</h2>
@@ -657,72 +637,120 @@ export function CreateApp() {
         </div>
 
         {/* ── Domaine & Ingress ────────────────────────────────────────────── */}
-        <div className="card p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-white">Domaine & Ingress</h2>
-            {!canSetDomain && (
-              <span className="flex items-center gap-1 text-xs text-slate-500">
-                <Lock className="w-3 h-3" /> Réservé aux admins projet
-              </span>
+        {selectedTemplate?.noIngress ? (
+          /* Service interne : pas d'URL nécessaire */
+          <div className="card p-4 flex items-center gap-3 text-slate-500 text-sm border-dashed">
+            <Globe className="w-4 h-4 shrink-0" />
+            <span>
+              Ce service n'expose pas d'interface web — aucune URL nécessaire.
+              Il sera accessible <strong className="text-slate-400">en interne</strong> via son nom
+              de service Kubernetes&nbsp;(<code className="text-xs text-slate-400">{name || 'nom-app'}</code>).
+            </span>
+          </div>
+        ) : (
+          <div className="card p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Globe className="w-4 h-4 text-accent" /> Domaine & Ingress
+              </h2>
+              {!canSetDomain && (
+                <span className="flex items-center gap-1 text-xs text-slate-500">
+                  <Lock className="w-3 h-3" /> Réservé aux admins projet
+                </span>
+              )}
+            </div>
+            {!canSetDomain ? (
+              <p className="text-xs text-slate-500 italic">
+                Le domaine sera assigné automatiquement par l'administrateur du projet.
+              </p>
+            ) : (
+              <>
+                {/* Sélecteur de wildcard */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">Sous-domaine</label>
+                    <input
+                      className="input"
+                      placeholder={name || 'my-app'}
+                      value={subdomain}
+                      onChange={(e) => setSubdomain(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Domaine wildcard</label>
+                    {availableWildcards.length > 1 ? (
+                      <>
+                        <select
+                          className="input"
+                          value={domainMode}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setDomainMode(v);
+                            if (v !== '__custom') setDomain(v);
+                            else setDomain('');
+                          }}
+                        >
+                          {availableWildcards.map((w) => (
+                            <option key={w.value} value={w.value}>{w.label}</option>
+                          ))}
+                        </select>
+                        {domainMode === '__custom' && (
+                          <input
+                            className="input mt-2"
+                            placeholder="example.com"
+                            value={domain}
+                            onChange={(e) => setDomain(e.target.value)}
+                          />
+                        )}
+                      </>
+                    ) : (
+                      <input
+                        className="input"
+                        placeholder="example.com"
+                        value={domain}
+                        onChange={(e) => setDomain(e.target.value)}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {/* Aperçu URL */}
+                {(subdomain || name) && domain && domain !== '__custom' && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent/5 border border-accent/20 text-xs">
+                    <Globe className="w-3.5 h-3.5 text-accent shrink-0" />
+                    <span className="text-accent font-mono">
+                      {tlsEnabled ? 'https' : 'http'}://{subdomain || name}.{domain}
+                    </span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">Ingress Class</label>
+                    <select
+                      className="input"
+                      value={ingressClass}
+                      onChange={(e) => setIngressClass(e.target.value)}
+                    >
+                      <option value="traefik">Traefik (k3s default)</option>
+                      <option value="nginx">nginx</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-3 pt-6">
+                    <input
+                      type="checkbox"
+                      id="tls"
+                      checked={tlsEnabled}
+                      onChange={(e) => setTlsEnabled(e.target.checked)}
+                      className="w-4 h-4 rounded accent-accent"
+                    />
+                    <label htmlFor="tls" className="text-sm text-slate-300">Activer TLS (HTTPS)</label>
+                  </div>
+                </div>
+              </>
             )}
           </div>
-          {!canSetDomain ? (
-            <p className="text-xs text-slate-500 italic">
-              Le domaine sera assigné automatiquement par l'administrateur du projet.
-            </p>
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="label">Sous-domaine</label>
-                  <input
-                    className="input"
-                    placeholder={name || 'my-app'}
-                    value={subdomain}
-                    onChange={(e) => setSubdomain(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="label">Domaine wildcard</label>
-                  <input
-                    className="input"
-                    placeholder="example.com"
-                    value={domain}
-                    onChange={(e) => setDomain(e.target.value)}
-                  />
-                </div>
-              </div>
-              {subdomain && domain && (
-                <p className="text-xs text-accent">
-                  → URL : {tlsEnabled ? 'https' : 'http'}://{subdomain}.{domain}
-                </p>
-              )}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="label">Ingress Class</label>
-                  <select
-                    className="input"
-                    value={ingressClass}
-                    onChange={(e) => setIngressClass(e.target.value)}
-                  >
-                    <option value="traefik">Traefik (k3s default)</option>
-                    <option value="nginx">nginx</option>
-                  </select>
-                </div>
-                <div className="flex items-center gap-3 pt-6">
-                  <input
-                    type="checkbox"
-                    id="tls"
-                    checked={tlsEnabled}
-                    onChange={(e) => setTlsEnabled(e.target.checked)}
-                    className="w-4 h-4 rounded accent-accent"
-                  />
-                  <label htmlFor="tls" className="text-sm text-slate-300">Activer TLS (HTTPS)</label>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        )}
 
         {/* ── Configuration avancée (collapsible) ─────────────────────────── */}
         <div className="card overflow-hidden">
@@ -922,6 +950,10 @@ export function CreateApp() {
             </button>
           </div>
         </div>
+
+        {/* Fin du bloc conditionnel masqué pour GitHub deploy */}
+        </>)}
+
       </form>
     </div>
   );

@@ -33,7 +33,7 @@ export async function terminalRoutes(fastify: FastifyInstance) {
     }
 
     // Simple access check: admin or has any membership
-    if (role !== 'admin') {
+    if (role !== 'super-admin' && role !== 'admin') {
       const appMembership = await db.query.appPermissions.findFirst({
         where: (t, { and, eq: deq }) => and(
           deq(t.appId, application.id),
@@ -93,7 +93,7 @@ export async function terminalRoutes(fastify: FastifyInstance) {
       }
 
       // Access check
-      if (jwtPayload.role !== 'admin') {
+      if (jwtPayload.role !== 'super-admin' && jwtPayload.role !== 'admin') {
         const appMembership = await db.query.appPermissions.findFirst({
           where: (t, { and, eq: deq }) => and(
             deq(t.appId, application.id),

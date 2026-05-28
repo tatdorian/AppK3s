@@ -25,17 +25,32 @@ export const createAppSchema = z.object({
     .regex(/^[a-z0-9-]+$/, 'Lowercase letters, numbers and hyphens only'),
   namespace: z.string().default('default'),
   projectId: z.string().uuid().optional(), // null → assigned to Default project
-  type: z.enum(['docker-image', 'compose', 'github']),
+  type: z.enum(['docker-image', 'compose', 'github', 'git', 'github-app']),
   templateId: z.string().optional(),
   image: z.string().optional(),
   imageTag: z.string().default('latest'),
   composeContent: z.string().optional(),
-  // GitHub source
-  githubUrl: z.string().url().optional(),
+  // GitHub source (legacy PAT mode)
+  githubUrl: z.string().optional(),
   githubToken: z.string().optional(),
   githubUsername: z.string().optional(),
   githubBranch: z.string().optional(),
   githubComposePath: z.string().optional(),
+  // Coolify-like git build
+  gitSourceId: z.string().uuid().optional(),
+  gitRepoUrl: z.string().optional(),
+  gitBranch: z.string().optional(),
+  buildType: z.enum(['nixpacks', 'dockerfile', 'docker-compose', 'static']).optional(),
+  buildDir: z.string().optional(),
+  dockerfilePath: z.string().optional(),
+  installCommand: z.string().optional(),
+  buildCommand: z.string().optional(),
+  startCommand: z.string().optional(),
+  publishDir: z.string().optional(),
+  autoDeploy: z.boolean().optional(),
+  // GitHub App deployment
+  githubInstallationId: z.string().uuid().optional(),
+  githubRepoFullName: z.string().optional(),
   envVars: z.array(envVarSchema).default([]),
   ports: z.array(portSchema).default([]),
   volumes: z.array(volumeSchema).default([]),
@@ -74,6 +89,7 @@ export const projectRoleSchema = z.enum(['owner', 'member', 'viewer']);
 export const createProjectSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().optional(),
+  wildcardDomain: z.string().optional(),
 });
 
 export const updateProjectSchema = createProjectSchema.partial();

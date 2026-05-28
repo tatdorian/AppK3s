@@ -1,20 +1,18 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Search, Loader2, FolderOpen } from 'lucide-react';
-import { useApps, useDeleteApp } from '../hooks/useApps.js';
+import { useApps } from '../hooks/useApps.js';
 import { AppCard } from '../components/AppCard.js';
 import { useProjectStore } from '../store/project.js';
 import { useAuthStore } from '../store/auth.js';
 
 export function AppsPage() {
   const { data: apps = [], isLoading } = useApps();
-  const deleteMut = useDeleteApp();
   const { currentProjectId } = useProjectStore();
   const { user } = useAuthStore();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
 
   const [search, setSearch] = useState('');
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   // Filtre par projet sélectionné
   const projectApps = useMemo(() => {
@@ -30,16 +28,6 @@ export function AppsPage() {
       a.name.toLowerCase().includes(search.toLowerCase()) ||
       (a.image ?? '').toLowerCase().includes(search.toLowerCase()),
   );
-
-  const handleDelete = (id: string) => {
-    if (confirmDelete === id) {
-      deleteMut.mutate(id);
-      setConfirmDelete(null);
-    } else {
-      setConfirmDelete(id);
-      setTimeout(() => setConfirmDelete(null), 3000);
-    }
-  };
 
   // Non-admin sans projet sélectionné
   const noProjectSelected = !isAdmin && currentProjectId === null;
@@ -112,14 +100,7 @@ export function AppsPage() {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {filtered.map((app) => (
-                <div key={app.id} className="relative">
-                  {confirmDelete === app.id && (
-                    <div className="absolute inset-0 z-10 rounded-xl bg-red-900/80 backdrop-blur-sm flex items-center justify-center gap-3">
-                      <span className="text-sm text-red-200">Cliquez à nouveau pour confirmer</span>
-                    </div>
-                  )}
-                  <AppCard app={app} onDelete={handleDelete} />
-                </div>
+                <AppCard key={app.id} app={app} showDelete={isAdmin} />
               ))}
             </div>
           )}

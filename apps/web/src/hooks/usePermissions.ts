@@ -34,7 +34,7 @@ const ROLE_CAPS: Record<AppRole, Omit<AppCapabilities, 'role' | 'isAdmin' | 'isL
 
 export function useAppPermissions(appId: string): AppCapabilities {
   const { user } = useAuthStore();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
 
   const { data, isLoading } = useQuery({
     queryKey: ['apps', appId, 'my-role'],

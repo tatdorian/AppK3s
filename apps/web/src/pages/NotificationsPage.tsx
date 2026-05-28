@@ -10,6 +10,8 @@ import {
   SendHorizonal,
   Mail,
   Webhook,
+  Pencil,
+  X,
 } from 'lucide-react';
 import { notificationsApi } from '../lib/api.js';
 import type { NotificationChannel, NotificationChannelType } from '@appk3s/shared';
@@ -165,9 +167,138 @@ function CreateChannelModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ─── Edit Channel Modal ───────────────────────────────────────────────────────
+function EditChannelModal({
+  channel,
+  onClose,
+}: {
+  channel: NotificationChannel;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(channel.name);
+  const [email, setEmail] = useState(
+    channel.type === 'email' ? (channel.config as Record<string, string>).email ?? '' : '',
+  );
+  const [webhookUrl, setWebhookUrl] = useState(
+    channel.type !== 'email' ? (channel.config as Record<string, string>).url ?? '' : '',
+  );
+  const [events, setEvents] = useState<string[]>(channel.events ?? []);
+
+  const toggleEvent = (id: string) =>
+    setEvents((prev) => (prev.includes(id) ? prev.filter((e) => e !== id) : [...prev, id]));
+
+  const buildConfig = (): Record<string, string> => {
+    if (channel.type === 'email') return { email };
+    return { url: webhookUrl };
+  };
+
+  const updateMut = useMutation({
+    mutationFn: () =>
+      notificationsApi.updateChannel(channel.id, {
+        name,
+        config: buildConfig(),
+        events,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['notification-channels'] });
+      toast.success('Canal mis à jour');
+      onClose();
+    },
+    onError: (err: { response?: { data?: { message?: string } } }) =>
+      toast.error(err?.response?.data?.message ?? 'Échec de la mise à jour'),
+  });
+
+  const isValid = name.trim() && (channel.type === 'email' ? email.trim() : webhookUrl.trim());
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+      <div className="card w-full max-w-md p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-white flex items-center gap-2">
+            <Pencil className="w-4 h-4 text-accent" /> Modifier le canal
+          </h2>
+          <button className="btn-ghost p-1" onClick={onClose}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div>
+          <label className="label">Nom</label>
+          <input
+            className="input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+          />
+        </div>
+
+        {channel.type === 'email' ? (
+          <div>
+            <label className="label">Adresse email</label>
+            <input
+              className="input"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
+        ) : (
+          <div>
+            <label className="label">Webhook URL</label>
+            <input
+              className="input"
+              type="url"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+            />
+          </div>
+        )}
+
+        <div>
+          <label className="label">
+            Événements{' '}
+            <span className="text-slate-500 font-normal">(vide = tous les événements)</span>
+          </label>
+          <div className="space-y-1 mt-1">
+            {AVAILABLE_EVENTS.map((ev) => (
+              <label key={ev.id} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={events.includes(ev.id)}
+                  onChange={() => toggleEvent(ev.id)}
+                  className="w-3.5 h-3.5 rounded accent-accent"
+                />
+                <span className="text-sm text-slate-300">{ev.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button className="btn-ghost" onClick={onClose}>Annuler</button>
+          <button
+            className="btn-primary"
+            disabled={!isValid || updateMut.isPending}
+            onClick={() => updateMut.mutate()}
+          >
+            {updateMut.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Pencil className="w-4 h-4" />
+            )}
+            Enregistrer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Channel Row ───────────────────────────────────────────────────────────────
 function ChannelRow({ channel }: { channel: NotificationChannel }) {
   const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
 
   const toggleMut = useMutation({
     mutationFn: () =>
@@ -195,62 +326,75 @@ function ChannelRow({ channel }: { channel: NotificationChannel }) {
   const Icon = CHANNEL_ICONS[channel.type as NotificationChannelType] ?? Bell;
 
   return (
-    <div className="flex items-center justify-between gap-3 py-3 border-b border-slate-700/40 last:border-0">
-      <div className="flex items-center gap-3 min-w-0">
-        <button
-          onClick={() => toggleMut.mutate()}
-          disabled={toggleMut.isPending}
-          className="text-slate-400 hover:text-accent transition-colors shrink-0"
-        >
-          {channel.enabled ? (
-            <ToggleRight className="w-5 h-5 text-green-400" />
-          ) : (
-            <ToggleLeft className="w-5 h-5" />
-          )}
-        </button>
-        <div className="w-7 h-7 rounded bg-surface-300 flex items-center justify-center shrink-0">
-          <Icon className="w-3.5 h-3.5 text-accent" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-sm text-white">{channel.name}</p>
-          <p className="text-xs text-slate-500 mt-0.5 capitalize">
-            {channel.type}
-            {channel.events.length > 0 && (
-              <span> · {channel.events.length} events</span>
+    <>
+      <div className="flex items-center justify-between gap-3 py-3 border-b border-slate-700/40 last:border-0">
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            onClick={() => toggleMut.mutate()}
+            disabled={toggleMut.isPending}
+            className="text-slate-400 hover:text-accent transition-colors shrink-0"
+          >
+            {channel.enabled ? (
+              <ToggleRight className="w-5 h-5 text-green-400" />
+            ) : (
+              <ToggleLeft className="w-5 h-5" />
             )}
-          </p>
+          </button>
+          <div className="w-7 h-7 rounded bg-surface-300 flex items-center justify-center shrink-0">
+            <Icon className="w-3.5 h-3.5 text-accent" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm text-white">{channel.name}</p>
+            <p className="text-xs text-slate-500 mt-0.5 capitalize">
+              {channel.type}
+              {channel.events.length > 0 && (
+                <span> · {channel.events.length} événements</span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            className="btn-ghost p-1.5 text-slate-400 hover:text-blue-400"
+            title="Envoyer une notification test"
+            onClick={() => testMut.mutate()}
+            disabled={testMut.isPending}
+          >
+            {testMut.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <SendHorizonal className="w-3.5 h-3.5" />
+            )}
+          </button>
+          <button
+            className="btn-ghost p-1.5 text-slate-400 hover:text-accent"
+            title="Modifier"
+            onClick={() => setEditing(true)}
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+          <button
+            className="btn-ghost p-1.5 text-slate-400 hover:text-red-400"
+            title="Supprimer"
+            onClick={() => {
+              if (confirm(`Supprimer le canal "${channel.name}" ?`)) deleteMut.mutate();
+            }}
+            disabled={deleteMut.isPending}
+          >
+            {deleteMut.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="w-3.5 h-3.5" />
+            )}
+          </button>
         </div>
       </div>
 
-      <div className="flex items-center gap-1 shrink-0">
-        <button
-          className="btn-ghost p-1.5 text-slate-400 hover:text-blue-400"
-          title="Send test notification"
-          onClick={() => testMut.mutate()}
-          disabled={testMut.isPending}
-        >
-          {testMut.isPending ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <SendHorizonal className="w-3.5 h-3.5" />
-          )}
-        </button>
-        <button
-          className="btn-ghost p-1.5 text-slate-400 hover:text-red-400"
-          title="Delete channel"
-          onClick={() => {
-            if (confirm(`Delete channel "${channel.name}"?`)) deleteMut.mutate();
-          }}
-          disabled={deleteMut.isPending}
-        >
-          {deleteMut.isPending ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <Trash2 className="w-3.5 h-3.5" />
-          )}
-        </button>
-      </div>
-    </div>
+      {editing && (
+        <EditChannelModal channel={channel} onClose={() => setEditing(false)} />
+      )}
+    </>
   );
 }
 

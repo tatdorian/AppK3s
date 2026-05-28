@@ -63,7 +63,7 @@ spec:
     solvers:
       - dns01:
           webhook:
-            groupName: acme.syit.fr
+            groupName: acme.example.com
             solverName: ovh
             config:
               endpoint: ovh-eu
@@ -113,40 +113,75 @@ export async function deleteWildcardCert(secretName = 'wildcard-tls') {
   kubectlDelete('secret', secretName, 'default');
 }
 
-// ── CoreDNS override update ──────────────────────────────────────────────────
-// Utilise le plugin "template" pour un wildcard automatique :
-// tout sous-domaine de wildcardDomain résout vers masterNodeIp à l'intérieur
-// du cluster (contournement hairpin NAT pour la validation ACME HTTP-01).
+// ── Delete interface cert + secret (on interfaceDomain change) ─────────────
+// cert-manager ne réémet pas si le secret appk3s-tls existe déjà (même expiré
+// ou pour l'ancien domaine). On le supprime pour forcer une nouvelle émission.
 
-export async function updateCoreDnsOverride(wildcardDomain: string, masterNodeIp: string) {
-  const yaml = `
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: coredns-custom
-  namespace: kube-system
-data:
-  syit.server: |
-    ${wildcardDomain}:53 {
-      template IN A ${wildcardDomain} {
-        match ^(.+\\.)?${wildcardDomain.replace(/\./g, '\\.')}\\.$
-        answer "{{ .Name }} 60 IN A ${masterNodeIp}"
-      }
-      template IN AAAA ${wildcardDomain} {
-        match ^(.+\\.)?${wildcardDomain.replace(/\./g, '\\.')}\\.$
-        rcode NOERROR
-      }
-      forward . /etc/resolv.conf
-    }
-`;
-  kubectl(yaml);
+export async function deleteInterfaceCert(secretName = 'appk3s-tls') {
+  kubectlDelete('certificate', secretName, 'default');
+  kubectlDelete('secret', secretName, 'default');
+}
 
-  // Redémarrer CoreDNS pour prendre en compte le changement
+// ── CoreDNS override helpers ─────────────────────────────────────────────────
+// K3s charge tous les fichiers *.server du ConfigMap coredns-custom (via
+// `import /etc/coredns/custom/*.server`). On utilise kubectl patch pour
+// ajouter/mettre à jour une clé sans écraser les autres clés existantes.
+
+function patchCoreDnsKey(key: string, serverBlock: string): void {
+  const kubeconfig = process.env.KUBECONFIG ?? '/etc/rancher/k3s/k3s.yaml';
+  const patch = JSON.stringify({ data: { [key]: serverBlock } });
+  execSync(
+    `KUBECONFIG=${kubeconfig} kubectl patch configmap coredns-custom -n kube-system --patch ${JSON.stringify(patch)}`,
+    { stdio: 'pipe' },
+  );
+}
+
+function restartCoreDns(): void {
   const kubeconfig = process.env.KUBECONFIG ?? '/etc/rancher/k3s/k3s.yaml';
   execSync(
     `KUBECONFIG=${kubeconfig} kubectl rollout restart deployment/coredns -n kube-system`,
     { stdio: 'pipe' },
   );
+}
+
+// ── Wildcard domain override ─────────────────────────────────────────────────
+// Tout sous-domaine de wildcardDomain résout vers masterNodeIp à l'intérieur
+// du cluster (contournement hairpin NAT pour la validation ACME HTTP-01).
+
+export async function updateCoreDnsOverride(wildcardDomain: string, masterNodeIp: string) {
+  const serverBlock = `${wildcardDomain}:53 {
+  template IN A ${wildcardDomain} {
+    match ^(.+\\.)?${wildcardDomain.replace(/\./g, '\\.')}\\.$
+    answer "{{ .Name }} 60 IN A ${masterNodeIp}"
+  }
+  template IN AAAA ${wildcardDomain} {
+    match ^(.+\\.)?${wildcardDomain.replace(/\./g, '\\.')}\\.$
+    rcode NOERROR
+  }
+  forward . /etc/resolv.conf
+}
+`;
+  patchCoreDnsKey('wildcard.server', serverBlock);
+  restartCoreDns();
+}
+
+// ── Interface domain override ────────────────────────────────────────────────
+// Le domaine de l'interface AK3s (ex: ak3s.syit.fr) doit aussi résoudre vers
+// masterNodeIp depuis l'intérieur du cluster pour que le challenge HTTP-01
+// Let's Encrypt fonctionne (self-check cert-manager).
+
+export async function updateInterfaceCoreDns(interfaceDomain: string, masterNodeIp: string) {
+  if (!interfaceDomain || !masterNodeIp) return;
+  const serverBlock = `${interfaceDomain}:53 {
+  hosts {
+    ${masterNodeIp} ${interfaceDomain}
+    fallthrough
+  }
+  forward . /etc/resolv.conf
+}
+`;
+  patchCoreDnsKey('interface.server', serverBlock);
+  restartCoreDns();
 }
 
 // ── Mettre à jour l'ingress de l'interface AppK3s ────────────────────────────
@@ -167,8 +202,8 @@ metadata:
 spec:
   ports:
     - name: http
-      port: 3001
-      targetPort: 3001
+      port: 3000
+      targetPort: 3000
       protocol: TCP
 `;
   kubectl(svcYaml);
@@ -190,7 +225,7 @@ endpoints:
       ready: true
 ports:
   - name: http
-    port: 3001
+    port: 3000
     protocol: TCP
 `;
   kubectl(epsYaml);
@@ -224,7 +259,7 @@ spec:
               service:
                 name: appk3s-web
                 port:
-                  number: 3001
+                  number: 3000
 `;
   kubectl(ingYaml);
 }

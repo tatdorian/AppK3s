@@ -4,6 +4,7 @@ import { db, schema } from '../db/index.js';
 import { createAppSchema, updateAppSchema, inviteMemberSchema, updateMemberRoleSchema } from '@appk3s/shared';
 import { DeploymentService } from '../services/deployment.service.js';
 import { KubernetesService } from '../services/kubernetes.service.js';
+import { generateWebhookSecret } from '../services/builder.service.js';
 
 async function getWildcardSettings() {
   const rows = await db.query.settings.findMany();
@@ -34,13 +35,17 @@ type AppAction = 'view' | 'deploy' | 'edit' | 'delete' | 'manageTeam';
  *     editor  = deploy + edit
  *     viewer  = read only
  */
+function isGlobalAdmin(role: string) {
+  return role === 'super-admin' || role === 'admin';
+}
+
 async function canDo(
   userId: string,
   globalRole: string,
   appId: string,
   action: AppAction,
 ): Promise<boolean> {
-  if (globalRole === 'admin') return true;
+  if (isGlobalAdmin(globalRole)) return true;
 
   // Fetch app to get projectId
   const app = await db.query.applications.findFirst({
@@ -96,7 +101,7 @@ export async function appsRoutes(fastify: FastifyInstance) {
   fastify.get('/', auth, async (request) => {
     const { sub: userId, role } = request.user;
 
-    if (role === 'admin') {
+    if (isGlobalAdmin(role)) {
       return db.query.applications.findMany({
         orderBy: [desc(schema.applications.createdAt)],
       });
@@ -164,12 +169,15 @@ export async function appsRoutes(fastify: FastifyInstance) {
     if (type === 'github' && !githubUrl) {
       return reply.code(400).send({ error: 'Validation', message: 'githubUrl est requis pour le type github' });
     }
+    if (type === 'github-app' && !body.data.githubInstallationId) {
+      return reply.code(400).send({ error: 'Validation', message: 'githubInstallationId requis pour le type github-app' });
+    }
 
     // If no projectId specified → assign to Default project
     const projectId = body.data.projectId ?? '00000000-0000-0000-0000-000000000001';
     let appData = { ...body.data, projectId };
 
-    if (role !== 'admin') {
+    if (!isGlobalAdmin(role)) {
       // Non-admin: must be owner or member of the target project
       const membership = await db.query.projectMembers.findFirst({
         where: and(
@@ -218,7 +226,7 @@ export async function appsRoutes(fastify: FastifyInstance) {
     let updates = { ...body.data };
 
     // Project member cannot change domain/URL settings — strip those fields
-    if (role !== 'admin' && existing.projectId) {
+    if (!isGlobalAdmin(role) && existing.projectId) {
       const membership = await db.query.projectMembers.findFirst({
         where: and(
           eq(schema.projectMembers.projectId, existing.projectId),
@@ -277,6 +285,56 @@ export async function appsRoutes(fastify: FastifyInstance) {
 
     const deployment = await deployService.deploy(application, userId);
     return reply.code(202).send(deployment);
+  });
+
+  // ── POST /api/apps/:id/rollback ────────────────────────────────────────────
+  fastify.post<{ Params: { id: string }; Body: { imageTag: string } }>(
+    '/:id/rollback',
+    auth,
+    async (request, reply) => {
+      const { sub: userId, role } = request.user;
+      const application = await db.query.applications.findFirst({
+        where: eq(schema.applications.id, request.params.id),
+      });
+      if (!application) return reply.code(404).send({ error: 'Not Found' });
+
+      if (!(await canDo(userId, role, application.id, 'deploy'))) {
+        return reply.code(403).send({ error: 'Forbidden', message: 'Access denied' });
+      }
+
+      const { imageTag } = request.body;
+      if (!imageTag) return reply.code(400).send({ error: 'imageTag is required' });
+
+      const deployment = await deployService.rollback(application, imageTag, userId);
+      return reply.code(202).send(deployment);
+    },
+  );
+
+  // ── POST /api/apps/:id/webhook/setup ──────────────────────────────────────
+  // Auto-configure a webhook secret for this app (without going through git source)
+  fastify.post<{ Params: { id: string } }>('/:id/webhook/setup', auth, async (request, reply) => {
+    const { sub: userId, role } = request.user;
+    if (!isGlobalAdmin(role)) return reply.code(403).send({ error: 'Admin only' });
+
+    const application = await db.query.applications.findFirst({
+      where: eq(schema.applications.id, request.params.id),
+    });
+    if (!application) return reply.code(404).send({ error: 'Not Found' });
+
+    const secret = generateWebhookSecret();
+    await db.update(schema.applications).set({
+      webhookSecret: secret,
+      updatedAt: new Date(),
+    }).where(eq(schema.applications.id, request.params.id));
+
+    const provider = application.gitSourceId ? 'auto' : 'github';
+    const settingsRows = await db.query.settings.findMany();
+    const s: Record<string, string> = {};
+    for (const r of settingsRows) s[r.key] = r.value;
+    const appUrl = s['interfaceDomain'] ? `https://${s['interfaceDomain']}` : '';
+    const webhookUrl = appUrl ? `${appUrl}/api/webhooks/github/${application.id}` : `/api/webhooks/github/${application.id}`;
+
+    return { secret, webhookUrl };
   });
 
   // ── POST /api/apps/:id/start ───────────────────────────────────────────────
@@ -380,7 +438,7 @@ export async function appsRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>('/:id/my-role', auth, async (request, reply) => {
     const { sub: userId, role: globalRole } = request.user;
 
-    if (globalRole === 'admin') {
+    if (isGlobalAdmin(globalRole)) {
       return { role: 'owner' as const, isAdmin: true };
     }
 
@@ -409,7 +467,7 @@ export async function appsRoutes(fastify: FastifyInstance) {
     const allUsers = await db.query.users.findMany({
       columns: { id: true, email: true, role: true },
     });
-    const nonAdmins = allUsers.filter((u) => u.role !== 'admin');
+    const nonAdmins = allUsers.filter((u) => !isGlobalAdmin(u.role));
 
     // Per-app explicit permissions
     const appMemberships = await db.query.appPermissions.findMany({
@@ -462,8 +520,8 @@ export async function appsRoutes(fastify: FastifyInstance) {
       where: eq(schema.users.id, body.data.userId),
     });
     if (!targetUser) return reply.code(404).send({ error: 'Not Found', message: 'User not found' });
-    if (targetUser.role === 'admin') {
-      return reply.code(400).send({ error: 'Bad Request', message: 'Admins already have full access' });
+    if (isGlobalAdmin(targetUser.role)) {
+      return reply.code(400).send({ error: 'Bad Request', message: 'Les admins ont déjà un accès complet' });
     }
 
     const [membership] = await db

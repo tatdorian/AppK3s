@@ -1,16 +1,17 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { projectsApi, usersApi } from '../lib/api.js';
 import { useAuthStore } from '../store/auth.js';
 import {
   ChevronLeft, FolderOpen, Users, Boxes, Plus,
-  Trash2, Shield, UserCog, Eye, UserPlus, KeyRound, EyeOff,
+  Trash2, Shield, UserCog, Eye, UserPlus, Mail,
+  Globe, Save, Loader2,
 } from 'lucide-react';
 import { AppCard } from '../components/AppCard.js';
 import toast from 'react-hot-toast';
 
-type Tab = 'apps' | 'team';
+type Tab = 'apps' | 'team' | 'settings';
 type AddMode = 'existing' | 'create';
 
 // ─── Labels de rôle projet ────────────────────────────────────────────────────
@@ -66,7 +67,7 @@ export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
   const { user } = useAuthStore();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
 
   const [tab, setTab] = useState<Tab>('apps');
   const [addMode, setAddMode] = useState<AddMode>('existing');
@@ -123,21 +124,22 @@ export function ProjectDetail() {
 
   // ── Créer un nouveau compte ───────────────────────────────────────────────
   const [newEmail, setNewEmail] = useState('');
-  const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState<ProjectRole>('member');
-  const [showPw, setShowPw] = useState(false);
+  const [createEmailSent, setCreateEmailSent] = useState(false);
 
   const createUserMut = useMutation({
     mutationFn: () =>
-      projectsApi.createUser(id!, { email: newEmail, password: newPassword, projectRole: newRole }),
+      projectsApi.createUser(id!, { email: newEmail, projectRole: newRole }),
     onSuccess: (data: any) => {
-      toast.success(`Compte créé : ${data.user.email}`);
-      setNewEmail('');
-      setNewPassword('');
-      setNewRole('member');
+      setCreateEmailSent(true);
       refetchMembers();
       qc.invalidateQueries({ queryKey: ['projects', id, 'members'] });
       qc.invalidateQueries({ queryKey: ['users'] });
+      setTimeout(() => {
+        setNewEmail('');
+        setNewRole('member');
+        setCreateEmailSent(false);
+      }, 3000);
     },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Erreur de création'),
   });
@@ -161,6 +163,22 @@ export function ProjectDetail() {
       refetchMembers();
     },
     onError: () => toast.error('Erreur'),
+  });
+
+  // ── Paramètres du projet (wildcard domain) ────────────────────────────────
+  const [wildcardDomain, setWildcardDomain] = useState('');
+  useEffect(() => {
+    if (project) setWildcardDomain((project as any).wildcardDomain ?? '');
+  }, [project]);
+
+  const updateProjectMut = useMutation({
+    mutationFn: () => projectsApi.update(id!, { wildcardDomain: wildcardDomain || undefined }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects', id] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      toast.success('Paramètres du projet sauvegardés');
+    },
+    onError: () => toast.error('Erreur de sauvegarde'),
   });
 
   if (isLoading || !project) {
@@ -241,6 +259,7 @@ export function ProjectDetail() {
         {([
           { id: 'apps' as Tab, label: 'Applications', icon: Boxes },
           ...(canManageTeam ? [{ id: 'team' as Tab, label: 'Équipe', icon: Users }] : []),
+          ...(canManageTeam ? [{ id: 'settings' as Tab, label: 'Paramètres', icon: Globe }] : []),
         ] as { id: Tab; label: string; icon: React.ElementType }[]).map(({ id: tabId, label, icon: Icon }) => (
           <button
             key={tabId}
@@ -396,36 +415,33 @@ export function ProjectDetail() {
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="label">Mot de passe *</label>
-                  <div className="relative">
-                    <input
-                      className="input pr-10"
-                      type={showPw ? 'text' : 'password'}
-                      placeholder="Mot de passe temporaire"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      autoComplete="new-password"
-                    />
-                    <button
-                      type="button"
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
-                      onClick={() => setShowPw((v) => !v)}
-                    >
-                      {showPw ? <EyeOff className="w-4 h-4" /> : <KeyRound className="w-4 h-4" />}
-                    </button>
+                {createEmailSent ? (
+                  <div className="flex items-center gap-3 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                    <Mail className="w-5 h-5 text-emerald-400 shrink-0" />
+                    <p className="text-sm text-emerald-300">
+                      Email envoyé à <strong>{newEmail}</strong> avec un lien pour définir son mot de passe.
+                    </p>
                   </div>
-                </div>
-                <div className="flex justify-end">
-                  <button
-                    className="btn-primary"
-                    onClick={() => createUserMut.mutate()}
-                    disabled={!newEmail || !newPassword || createUserMut.isPending}
-                  >
-                    <UserPlus className="w-4 h-4" />
-                    {createUserMut.isPending ? 'Création...' : 'Créer et ajouter'}
-                  </button>
-                </div>
+                ) : (
+                  <>
+                    <div className="flex items-start gap-2.5 p-3 rounded-lg bg-accent/5 border border-accent/20">
+                      <Mail className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Un email sera envoyé avec un lien pour définir le mot de passe. Aucun mot de passe temporaire n'est nécessaire.
+                      </p>
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        className="btn-primary"
+                        onClick={() => createUserMut.mutate()}
+                        disabled={!newEmail || createUserMut.isPending}
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        {createUserMut.isPending ? 'Envoi...' : 'Créer et inviter'}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -510,6 +526,52 @@ export function ProjectDetail() {
           <p className="text-xs text-slate-600">
             Les Admins Généraux ont toujours accès complet à tous les projets sans être listés ici.
           </p>
+        </div>
+      )}
+
+      {/* ── Settings tab ──────────────────────────────────────────────────────── */}
+      {tab === 'settings' && canManageTeam && (
+        <div className="space-y-5">
+          <div className="card p-5 space-y-4">
+            <div className="flex items-center gap-2">
+              <Globe className="w-4 h-4 text-accent" />
+              <h2 className="text-sm font-semibold text-white">Domaine wildcard du projet</h2>
+            </div>
+            <p className="text-xs text-slate-500">
+              Définissez un domaine spécifique à ce projet. Les apps créées dans ce projet
+              proposeront ce domaine par défaut au lieu du domaine global.
+              Laissez vide pour utiliser le domaine global.
+            </p>
+            <div>
+              <label className="label flex items-center gap-1">
+                <Globe className="w-3 h-3" /> Wildcard domain (ex : <code className="text-xs text-accent">prod.example.com</code>)
+              </label>
+              <input
+                className="input"
+                placeholder="prod.example.com"
+                value={wildcardDomain}
+                onChange={(e) => setWildcardDomain(e.target.value.trim())}
+              />
+              {wildcardDomain && (
+                <p className="text-xs text-accent mt-1">
+                  Les apps de ce projet seront sous : *.{wildcardDomain}
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end">
+              <button
+                className="btn-primary"
+                onClick={() => updateProjectMut.mutate()}
+                disabled={updateProjectMut.isPending}
+              >
+                {updateProjectMut.isPending ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Sauvegarde…</>
+                ) : (
+                  <><Save className="w-4 h-4" /> Sauvegarder</>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

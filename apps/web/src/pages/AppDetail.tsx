@@ -20,6 +20,8 @@ import {
   Lock,
   Terminal,
   Database,
+  GitBranch,
+  ChevronDown,
 } from 'lucide-react';
 import { useApp, useAppStatus, useDeployments, useUpdateApp, useDeleteApp } from '../hooks/useApps.js';
 import { CredentialsPanel } from '../components/CredentialsPanel.js';
@@ -48,6 +50,17 @@ interface ConfigForm {
   githubUsername: string;
   githubBranch: string;
   githubComposePath: string;
+  // Git/GitHub App build config
+  gitBranch: string;
+  buildType: 'nixpacks' | 'dockerfile' | 'docker-compose' | 'static';
+  buildDir: string;
+  dockerfilePath: string;
+  installCommand: string;
+  buildCommand: string;
+  startCommand: string;
+  publishDir: string;
+  autoDeploy: boolean;
+  // Domain & ingress
   subdomain: string;
   domain: string;
   ingressClass: string;
@@ -59,6 +72,108 @@ interface ConfigForm {
 }
 
 // ─── Terminal Tab ─────────────────────────────────────────────────────────────
+// ─── Deployments tab with rollback ───────────────────────────────────────────
+
+function DeploymentsTab({
+  appId,
+  deployments,
+  canDeploy,
+  onRollback,
+}: {
+  appId: string;
+  deployments: import('@appk3s/shared').Deployment[];
+  canDeploy: boolean;
+  onRollback: (imageTag: string) => void;
+}) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const statusColor = (status: string) => {
+    if (status === 'success') return 'text-green-400';
+    if (status === 'failed') return 'text-red-400';
+    if (status === 'running') return 'text-blue-400';
+    return 'text-slate-400';
+  };
+
+  if (deployments.length === 0) {
+    return (
+      <div className="card p-8 text-center text-slate-500">
+        <Rocket className="w-8 h-8 mx-auto mb-2 opacity-30" />
+        <p className="text-sm">Aucun déploiement pour le moment.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {deployments.map((d, idx) => (
+        <div key={d.id} className="card overflow-hidden">
+          <div
+            className="px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-surface-200/30 transition-colors"
+            onClick={() => setExpandedId(expandedId === d.id ? null : d.id)}
+          >
+            {/* Index badge */}
+            <span className={`text-xs font-mono font-bold ${statusColor(d.status)} w-6 shrink-0`}>
+              #{deployments.length - idx}
+            </span>
+
+            <StatusBadge status={d.status} size="sm" />
+
+            <div className="flex-1 min-w-0">
+              {(d as any).commitSha && (
+                <div className="flex items-center gap-2">
+                  <code className="text-xs text-accent font-mono">{(d as any).commitSha.slice(0, 8)}</code>
+                  {(d as any).commitMessage && (
+                    <span className="text-xs text-slate-400 truncate">{(d as any).commitMessage}</span>
+                  )}
+                </div>
+              )}
+              <div className="text-xs text-slate-500">
+                {(d as any).triggeredByEmail && <span className="mr-2">par {(d as any).triggeredByEmail}</span>}
+                <span>{formatDate(d.createdAt)}</span>
+                {d.completedAt && <span className="ml-2">→ {formatDate(d.completedAt)}</span>}
+              </div>
+            </div>
+
+            {/* Rollback button (only for successful deployments with an imageTag, not the latest) */}
+            {canDeploy && d.status === 'success' && (d as any).imageTag && idx > 0 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onRollback((d as any).imageTag); }}
+                className="btn-ghost text-xs py-1 px-2 text-orange-400 hover:text-orange-300 shrink-0"
+                title="Rollback vers cette version"
+              >
+                <RotateCcw className="w-3.5 h-3.5 inline mr-1" />
+                Rollback
+              </button>
+            )}
+
+            <ChevronDown className={`w-4 h-4 text-slate-500 shrink-0 transition-transform ${expandedId === d.id ? 'rotate-180' : ''}`} />
+          </div>
+
+          {/* Expanded logs */}
+          {expandedId === d.id && (
+            <div className="border-t border-slate-700/40">
+              {d.error && (
+                <div className="px-4 py-2 bg-red-500/5 border-b border-red-500/20">
+                  <p className="text-xs text-red-400 font-mono">{d.error}</p>
+                </div>
+              )}
+              {(d as any).imageTag && (
+                <div className="px-4 py-2 border-b border-slate-700/20">
+                  <span className="text-xs text-slate-500">Image : </span>
+                  <code className="text-xs text-slate-300 font-mono">{(d as any).imageTag}</code>
+                </div>
+              )}
+              <pre className="px-4 py-3 text-xs font-mono text-slate-400 max-h-64 overflow-y-auto whitespace-pre-wrap bg-surface-200/30">
+                {d.logs || '(pas de logs)'}
+              </pre>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TerminalTab({ appId }: { appId: string }) {
   const [selectedPod, setSelectedPod] = useState<string | null>(null);
 
@@ -343,7 +458,7 @@ export function AppDetail() {
   const [searchParams] = useSearchParams();
   const qc = useQueryClient();
   const { user } = useAuthStore();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
 
   const [tab, setTab] = useState<Tab>('overview');
   const [envVars, setEnvVars] = useState<EnvVar[] | null>(null);
@@ -431,28 +546,37 @@ export function AppDetail() {
     onError: () => toast.error('Échec du redémarrage'),
   });
 
+  const buildFormFromApp = (a: typeof app) => ({
+    name: a!.name,
+    image: a!.image ?? '',
+    imageTag: a!.imageTag,
+    composeContent: a!.composeContent ?? '',
+    githubToken: (a as any).githubToken ?? '',
+    githubUsername: (a as any).githubUsername ?? '',
+    githubBranch: (a as any).githubBranch ?? 'main',
+    githubComposePath: (a as any).githubComposePath ?? 'docker-compose.yml',
+    gitBranch: (a as any).gitBranch ?? 'main',
+    buildType: ((a as any).buildType ?? 'nixpacks') as ConfigForm['buildType'],
+    buildDir: (a as any).buildDir ?? '',
+    dockerfilePath: (a as any).dockerfilePath ?? '',
+    installCommand: (a as any).installCommand ?? '',
+    buildCommand: (a as any).buildCommand ?? '',
+    startCommand: (a as any).startCommand ?? '',
+    publishDir: (a as any).publishDir ?? '',
+    autoDeploy: (a as any).autoDeploy ?? false,
+    subdomain: a!.subdomain ?? '',
+    domain: a!.domain ?? '',
+    ingressClass: a!.ingressClass,
+    tlsEnabled: a!.tlsEnabled,
+    ports: a!.ports,
+    replicas: a!.replicas,
+    cpuLimit: a!.cpuLimit ?? '',
+    memoryLimit: a!.memoryLimit ?? '',
+  });
+
   // Init config form from app data (first time only)
   useEffect(() => {
-    if (app && !configForm) {
-      setConfigForm({
-        name: app.name,
-        image: app.image ?? '',
-        imageTag: app.imageTag,
-        composeContent: app.composeContent ?? '',
-        githubToken: (app as any).githubToken ?? '',
-        githubUsername: (app as any).githubUsername ?? '',
-        githubBranch: (app as any).githubBranch ?? 'main',
-        githubComposePath: (app as any).githubComposePath ?? 'docker-compose.yml',
-        subdomain: app.subdomain ?? '',
-        domain: app.domain ?? '',
-        ingressClass: app.ingressClass,
-        tlsEnabled: app.tlsEnabled,
-        ports: app.ports,
-        replicas: app.replicas,
-        cpuLimit: app.cpuLimit ?? '',
-        memoryLimit: app.memoryLimit ?? '',
-      });
-    }
+    if (app && !configForm) setConfigForm(buildFormFromApp(app));
   }, [app]);
 
   if (isLoading || !app) {
@@ -496,27 +620,7 @@ export function AppDetail() {
     setEnvVars(null);
   };
 
-  const resetConfig = () => {
-    if (!app) return;
-    setConfigForm({
-      name: app.name,
-      image: app.image ?? '',
-      imageTag: app.imageTag,
-      composeContent: app.composeContent ?? '',
-      githubToken: (app as any).githubToken ?? '',
-      githubUsername: (app as any).githubUsername ?? '',
-      githubBranch: (app as any).githubBranch ?? 'main',
-      githubComposePath: (app as any).githubComposePath ?? 'docker-compose.yml',
-      subdomain: app.subdomain ?? '',
-      domain: app.domain ?? '',
-      ingressClass: app.ingressClass,
-      tlsEnabled: app.tlsEnabled,
-      ports: app.ports,
-      replicas: app.replicas,
-      cpuLimit: app.cpuLimit ?? '',
-      memoryLimit: app.memoryLimit ?? '',
-    });
-  };
+  const resetConfig = () => { if (app) setConfigForm(buildFormFromApp(app)); };
 
   const saveConfig = async (andDeploy: boolean) => {
     if (!configForm) return;
@@ -525,11 +629,21 @@ export function AppDetail() {
       image: configForm.image || undefined,
       imageTag: configForm.imageTag,
       composeContent: configForm.composeContent || undefined,
-      // GitHub fields (githubUrl is immutable after creation — not included)
+      // Legacy GitHub fields
       githubToken: configForm.githubToken || undefined,
       githubUsername: configForm.githubUsername || undefined,
       githubBranch: configForm.githubBranch || undefined,
       githubComposePath: configForm.githubComposePath || undefined,
+      // Git/GitHub App build config
+      gitBranch: configForm.gitBranch || undefined,
+      buildType: configForm.buildType || undefined,
+      buildDir: configForm.buildDir || undefined,
+      dockerfilePath: configForm.dockerfilePath || undefined,
+      installCommand: configForm.installCommand || undefined,
+      buildCommand: configForm.buildCommand || undefined,
+      startCommand: configForm.startCommand || undefined,
+      publishDir: configForm.publishDir || undefined,
+      autoDeploy: configForm.autoDeploy,
       subdomain: configForm.subdomain || undefined,
       domain: configForm.domain || undefined,
       ingressClass: configForm.ingressClass,
@@ -773,6 +887,45 @@ export function AppDetail() {
               </table>
             </div>
           )}
+          {/* Git build info */}
+          {app.type === 'git' && (
+            <div className="card p-4 space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <GitBranch className="w-3.5 h-3.5 text-accent" />
+                <h3 className="text-sm font-semibold text-white">Source Git</h3>
+                {(app as any).buildType && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-accent/15 text-accent capitalize">
+                    {(app as any).buildType}
+                  </span>
+                )}
+                {(app as any).autoDeploy && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/15 text-green-400">
+                    Auto-deploy ✓
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
+                <div>
+                  <span className="text-slate-500">Dépôt :</span>{' '}
+                  <code className="text-slate-300 font-mono">{(app as any).gitRepoUrl ?? '—'}</code>
+                </div>
+                <div>
+                  <span className="text-slate-500">Branche :</span>{' '}
+                  <span className="text-slate-300">{(app as any).gitBranch ?? 'main'}</span>
+                </div>
+                {(app as any).lastCommitSha && (
+                  <div>
+                    <span className="text-slate-500">Dernier commit :</span>{' '}
+                    <code className="text-accent font-mono">{(app as any).lastCommitSha.slice(0, 8)}</code>
+                    {(app as any).lastCommitMessage && (
+                      <span className="text-slate-400 ml-1">— {(app as any).lastCommitMessage}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {(app.type === 'compose' || app.type === 'github') && app.composeContent && (
             <div className="card overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-700/40 flex items-center gap-2">
@@ -798,7 +951,12 @@ export function AppDetail() {
       )}
 
       {/* ── Configuration ────────────────────────────────────────────────────── */}
-      {tab === 'config' && configForm && (
+      {tab === 'config' && configForm && (() => {
+        const isRunning = app.status === 'running';
+        const isGitBuild = app.type === 'github-app' || app.type === 'git';
+        const portsChanged = JSON.stringify(configForm.ports) !== JSON.stringify(app.ports);
+
+        return (
         <div className="space-y-5">
           {/* Name change warning */}
           {nameChanged && (
@@ -808,9 +966,19 @@ export function AppDetail() {
             </div>
           )}
 
-          {/* General */}
+          {/* Port change while running warning */}
+          {portsChanged && isRunning && (
+            <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              Changement de port détecté. <strong className="ml-1">Arrêtez l'application avant d'appliquer ce changement</strong> pour éviter une instabilité.
+            </div>
+          )}
+
+          {/* ── Général ── */}
           <div className="card p-5 space-y-4">
-            <h2 className="text-sm font-semibold text-white">Général</h2>
+            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+              <Settings className="w-4 h-4 text-slate-400" /> Général
+            </h2>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Nom de l'application</label>
@@ -824,186 +992,228 @@ export function AppDetail() {
               <div>
                 <label className="label">Replicas</label>
                 <input
-                  type="number"
-                  className="input"
-                  min={0} max={50}
+                  type="number" className="input" min={0} max={50}
                   value={configForm.replicas}
                   onChange={(e) => setConfigForm((f) => f ? { ...f, replicas: Number(e.target.value) } : f)}
                 />
               </div>
             </div>
 
-            {app.type === 'docker-image' ? (
+            {/* Image Docker */}
+            {app.type === 'docker-image' && (
               <div className="grid grid-cols-3 gap-4">
                 <div className="col-span-2">
                   <label className="label">Image Docker</label>
                   <input
-                    className="input"
-                    placeholder="nginx"
+                    className="input" placeholder="nginx"
                     value={configForm.image}
                     onChange={(e) => setConfigForm((f) => f ? { ...f, image: e.target.value } : f)}
                     onBlur={() => {
                       if (!configForm || configForm.ports.length > 0) return;
                       const imageBase = configForm.image.split(':')[0];
-                      const match = TEMPLATES.find(
-                        (t) => t.defaults.image === imageBase || t.defaults.image === configForm.image,
-                      );
-                      if (match && match.defaults.ports.length > 0) {
-                        setConfigForm((f) => f ? { ...f, ports: [...match.defaults.ports] } : f);
-                        return;
-                      }
+                      const match = TEMPLATES.find((t) => t.defaults.image === imageBase || t.defaults.image === configForm.image);
+                      if (match && match.defaults.ports.length > 0) { setConfigForm((f) => f ? { ...f, ports: [...match.defaults.ports] } : f); return; }
                       const port = IMAGE_PORT_MAP[imageBase] ?? IMAGE_PORT_MAP[configForm.image];
-                      if (port) {
-                        setConfigForm((f) => f ? { ...f, ports: [{ containerPort: port, protocol: 'TCP' }] } : f);
-                      }
+                      if (port) setConfigForm((f) => f ? { ...f, ports: [{ containerPort: port, protocol: 'TCP' }] } : f);
                     }}
                   />
                 </div>
                 <div>
                   <label className="label">Tag</label>
-                  <input
-                    className="input"
-                    placeholder="latest"
-                    value={configForm.imageTag}
-                    onChange={(e) => setConfigForm((f) => f ? { ...f, imageTag: e.target.value } : f)}
-                  />
+                  <input className="input" placeholder="latest" value={configForm.imageTag}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, imageTag: e.target.value } : f)} />
                 </div>
               </div>
-            ) : app.type === 'github' ? (
-              /* ── GitHub source ── */
+            )}
+
+            {/* GitHub legacy source */}
+            {app.type === 'github' && (
               <div className="space-y-3">
-                {/* Security warning */}
                 <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-300 text-xs">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                   <span>Le token est stocké en clair. Utilisez un token à permissions minimales (lecture seule).</span>
                 </div>
-
-                {/* URL — read-only */}
                 <div>
                   <label className="label">URL du dépôt GitHub</label>
-                  <div className="input bg-surface-200/50 text-slate-400 font-mono text-sm flex items-center gap-2 overflow-hidden">
-                    <span className="text-base">🐙</span>
-                    <span className="truncate">{(app as any).githubUrl}</span>
+                  <div className="input bg-surface-200/50 text-slate-400 font-mono text-sm flex items-center gap-2">
+                    <span>🐙</span><span className="truncate">{(app as any).githubUrl}</span>
                   </div>
                   <p className="text-xs text-slate-600 mt-1">L'URL ne peut pas être modifiée après la création.</p>
                 </div>
-
-                {/* Branch + compose path */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="label">Branche</label>
-                    <input
-                      className="input"
-                      placeholder="main"
-                      value={configForm.githubBranch}
-                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubBranch: e.target.value } : f)}
-                    />
+                    <input className="input" placeholder="main" value={configForm.githubBranch}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubBranch: e.target.value } : f)} />
                   </div>
                   <div>
-                    <label className="label">Chemin du fichier compose</label>
-                    <input
-                      className="input"
-                      placeholder="docker-compose.yml"
-                      value={configForm.githubComposePath}
-                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubComposePath: e.target.value } : f)}
-                    />
+                    <label className="label">Chemin compose</label>
+                    <input className="input" placeholder="docker-compose.yml" value={configForm.githubComposePath}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubComposePath: e.target.value } : f)} />
                   </div>
                 </div>
-
-                {/* Credentials */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="label">Nom d'utilisateur GitHub</label>
-                    <input
-                      className="input"
-                      placeholder="monlogin (facultatif pour repos publics)"
-                      value={configForm.githubUsername}
-                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubUsername: e.target.value } : f)}
-                    />
+                    <label className="label">Utilisateur GitHub</label>
+                    <input className="input" placeholder="monlogin" value={configForm.githubUsername}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubUsername: e.target.value } : f)} />
                   </div>
                   <div>
-                    <label className="label">Token d'accès (PAT)</label>
-                    <input
-                      className="input"
-                      type="password"
-                      placeholder="ghp_... (laisser vide pour repos publics)"
-                      value={configForm.githubToken}
-                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubToken: e.target.value } : f)}
-                    />
+                    <label className="label">Token PAT</label>
+                    <input className="input" type="password" placeholder="ghp_..." value={configForm.githubToken}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, githubToken: e.target.value } : f)} />
                   </div>
                 </div>
-
-                {/* Last fetched compose (read-only display) */}
                 {app.composeContent && (
                   <div>
-                    <label className="label">Contenu récupéré au dernier déploiement (lecture seule)</label>
-                    <pre className="input font-mono text-xs h-32 overflow-y-auto resize-none bg-surface-200/50 text-slate-400 whitespace-pre-wrap">
-                      {app.composeContent}
-                    </pre>
+                    <label className="label">Compose récupéré (lecture seule)</label>
+                    <pre className="input font-mono text-xs h-32 overflow-y-auto bg-surface-200/50 text-slate-400 whitespace-pre-wrap">{app.composeContent}</pre>
                   </div>
                 )}
               </div>
-            ) : (
+            )}
+
+            {/* Compose inline */}
+            {app.type === 'compose' && (
               <div>
                 <label className="label">docker-compose.yml</label>
-                <textarea
-                  className="input font-mono text-xs h-48 resize-none"
-                  value={configForm.composeContent}
-                  onChange={(e) => setConfigForm((f) => f ? { ...f, composeContent: e.target.value } : f)}
-                />
+                <textarea className="input font-mono text-xs h-48 resize-none" value={configForm.composeContent}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, composeContent: e.target.value } : f)} />
               </div>
             )}
           </div>
 
-          {/* Domain */}
+          {/* ── Source & Build (github-app / git) ── */}
+          {isGitBuild && (
+            <div className="card p-5 space-y-4">
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                <GitBranch className="w-4 h-4 text-slate-400" /> Source & Méthode de déploiement
+              </h2>
+
+              {/* Repo info — read-only */}
+              <div className="grid grid-cols-2 gap-3 p-3 rounded-lg bg-slate-800/50 border border-slate-700/50">
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">Dépôt</p>
+                  <p className="text-xs text-slate-300 font-mono truncate">{(app as any).githubRepoFullName ?? (app as any).gitRepoUrl ?? '—'}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">Dernier commit</p>
+                  <p className="text-xs text-slate-300 font-mono">{(app as any).lastCommitSha?.slice(0, 8) ?? '—'}</p>
+                </div>
+              </div>
+
+              {/* Branch */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="label">Branche</label>
+                  <input className="input" placeholder="main" value={configForm.gitBranch}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, gitBranch: e.target.value } : f)} />
+                </div>
+                <div>
+                  <label className="label">Méthode de build</label>
+                  <select className="input" value={configForm.buildType}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, buildType: e.target.value as ConfigForm['buildType'] } : f)}>
+                    <option value="nixpacks">Nixpacks (auto-détection)</option>
+                    <option value="dockerfile">Dockerfile</option>
+                    <option value="docker-compose">Docker Compose</option>
+                    <option value="static">Site statique (nginx)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Déploiement auto */}
+              <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg bg-slate-800/50 border border-slate-700 hover:border-slate-600 transition-all">
+                <input type="checkbox" checked={configForm.autoDeploy}
+                  onChange={(e) => setConfigForm((f) => f ? { ...f, autoDeploy: e.target.checked } : f)}
+                  className="w-4 h-4 rounded accent-accent" />
+                <div>
+                  <p className="text-white text-sm font-medium">Déploiement automatique</p>
+                  <p className="text-xs text-slate-500">Redéployer automatiquement à chaque push sur la branche</p>
+                </div>
+              </label>
+
+              {/* Build paths */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="label">Répertoire de build</label>
+                  <input className="input" placeholder="/ (racine)" value={configForm.buildDir}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, buildDir: e.target.value } : f)} />
+                </div>
+                {configForm.buildType === 'dockerfile' && (
+                  <div>
+                    <label className="label">Chemin Dockerfile</label>
+                    <input className="input" placeholder="Dockerfile" value={configForm.dockerfilePath}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, dockerfilePath: e.target.value } : f)} />
+                  </div>
+                )}
+                {configForm.buildType === 'static' && (
+                  <div>
+                    <label className="label">Répertoire de publication</label>
+                    <input className="input" placeholder="dist / build / public" value={configForm.publishDir}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, publishDir: e.target.value } : f)} />
+                  </div>
+                )}
+              </div>
+
+              {/* Commands */}
+              {(configForm.buildType === 'nixpacks' || configForm.buildType === 'dockerfile') && (
+                <div className="grid grid-cols-1 gap-3">
+                  <div>
+                    <label className="label">Commande d'installation <span className="text-slate-600">(optionnel)</span></label>
+                    <input className="input font-mono text-sm" placeholder="npm install" value={configForm.installCommand}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, installCommand: e.target.value } : f)} />
+                  </div>
+                  <div>
+                    <label className="label">Commande de build <span className="text-slate-600">(optionnel)</span></label>
+                    <input className="input font-mono text-sm" placeholder="npm run build" value={configForm.buildCommand}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, buildCommand: e.target.value } : f)} />
+                  </div>
+                  <div>
+                    <label className="label">Commande de démarrage <span className="text-slate-600">(optionnel — nixpacks auto-détecte)</span></label>
+                    <input className="input font-mono text-sm" placeholder="npm start" value={configForm.startCommand}
+                      onChange={(e) => setConfigForm((f) => f ? { ...f, startCommand: e.target.value } : f)} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Domaine & Ingress ── */}
           {canSetDomain ? (
             <div className="card p-5 space-y-4">
-              <h2 className="text-sm font-semibold text-white">Domaine & Ingress</h2>
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Globe className="w-4 h-4 text-slate-400" /> Domaine & Ingress
+              </h2>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="label">Sous-domaine</label>
-                  <input
-                    className="input"
-                    placeholder={app.name}
-                    value={configForm.subdomain}
-                    onChange={(e) => setConfigForm((f) => f ? { ...f, subdomain: e.target.value } : f)}
-                  />
+                  <input className="input" placeholder={app.name} value={configForm.subdomain}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, subdomain: e.target.value } : f)} />
                 </div>
                 <div>
                   <label className="label">Domaine wildcard</label>
-                  <input
-                    className="input"
-                    placeholder="example.com"
-                    value={configForm.domain}
-                    onChange={(e) => setConfigForm((f) => f ? { ...f, domain: e.target.value } : f)}
-                  />
+                  <input className="input" placeholder="example.com" value={configForm.domain}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, domain: e.target.value } : f)} />
                 </div>
               </div>
               {configForm.subdomain && configForm.domain && (
                 <p className="text-xs text-accent">
-                  → URL : {configForm.tlsEnabled ? 'https' : 'http'}://{configForm.subdomain}.{configForm.domain}
+                  → {configForm.tlsEnabled ? 'https' : 'http'}://{configForm.subdomain}.{configForm.domain}
                 </p>
               )}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="label">Ingress Class</label>
-                  <select
-                    className="input"
-                    value={configForm.ingressClass}
-                    onChange={(e) => setConfigForm((f) => f ? { ...f, ingressClass: e.target.value } : f)}
-                  >
-                    <option value="traefik">Traefik (k3s default)</option>
+                  <select className="input" value={configForm.ingressClass}
+                    onChange={(e) => setConfigForm((f) => f ? { ...f, ingressClass: e.target.value } : f)}>
+                    <option value="traefik">Traefik (k3s défaut)</option>
                     <option value="nginx">nginx</option>
                   </select>
                 </div>
                 <div className="flex items-center gap-3 pt-6">
-                  <input
-                    type="checkbox"
-                    id="tls-edit"
-                    checked={configForm.tlsEnabled}
+                  <input type="checkbox" id="tls-edit" checked={configForm.tlsEnabled}
                     onChange={(e) => setConfigForm((f) => f ? { ...f, tlsEnabled: e.target.checked } : f)}
-                    className="w-4 h-4 rounded accent-accent"
-                  />
+                    className="w-4 h-4 rounded accent-accent" />
                   <label htmlFor="tls-edit" className="text-sm text-slate-300">Activer TLS (HTTPS)</label>
                 </div>
               </div>
@@ -1015,44 +1225,41 @@ export function AppDetail() {
             </div>
           )}
 
-          {/* Ports */}
-          {app.type === 'docker-image' && canSetDomain && (
+          {/* ── Ports ── */}
+          {canSetDomain && (
             <div className="card p-5 space-y-3">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-white">Ports exposés</h2>
-                <button
-                  type="button"
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                    <Network className="w-4 h-4 text-slate-400" /> Ports exposés
+                  </h2>
+                  {isRunning && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" /> Arrêter l'app avant de modifier
+                    </span>
+                  )}
+                </div>
+                <button type="button"
                   onClick={() => setConfigForm((f) => f ? { ...f, ports: [...f.ports, { containerPort: 80, protocol: 'TCP' }] } : f)}
-                  className="btn-ghost text-xs py-1"
-                >
+                  className="btn-ghost text-xs py-1" disabled={isRunning}>
                   <Plus className="w-3.5 h-3.5" /> Ajouter
                 </button>
               </div>
               {configForm.ports.length === 0 && (
-                <p className="text-xs text-slate-600">Aucun port — le port 80 sera utilisé par défaut.</p>
+                <p className="text-xs text-slate-600">Aucun port configuré — le port 80 sera utilisé par défaut.</p>
               )}
               {configForm.ports.map((p, i) => (
                 <div key={i} className="flex gap-3 items-center">
-                  <input
-                    type="number"
-                    className="input"
-                    placeholder="Port"
-                    value={p.containerPort}
-                    onChange={(e) => setPort(i, { containerPort: Number(e.target.value) })}
-                  />
-                  <select
-                    className="input w-24 shrink-0"
-                    value={p.protocol}
-                    onChange={(e) => setPort(i, { protocol: e.target.value as 'TCP' | 'UDP' })}
-                  >
-                    <option>TCP</option>
-                    <option>UDP</option>
+                  <input type="number" className="input" placeholder="Port"
+                    value={p.containerPort} disabled={isRunning}
+                    onChange={(e) => setPort(i, { containerPort: Number(e.target.value) })} />
+                  <select className="input w-24 shrink-0" value={p.protocol} disabled={isRunning}
+                    onChange={(e) => setPort(i, { protocol: e.target.value as 'TCP' | 'UDP' })}>
+                    <option>TCP</option><option>UDP</option>
                   </select>
-                  <button
-                    type="button"
+                  <button type="button" disabled={isRunning}
                     onClick={() => setConfigForm((f) => f ? { ...f, ports: f.ports.filter((_, idx) => idx !== i) } : f)}
-                    className="btn-danger p-2 shrink-0"
-                  >
+                    className="btn-danger p-2 shrink-0">
                     <Minus className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -1117,7 +1324,7 @@ export function AppDetail() {
             </div>
           </div>
         </div>
-      )}
+      ); })()}
 
       {/* ── Env Vars ─────────────────────────────────────────────────────────── */}
       {tab === 'environment' && (
@@ -1322,38 +1529,21 @@ export function AppDetail() {
 
       {/* ── Deployments ──────────────────────────────────────────────────────── */}
       {tab === 'deployments' && (
-        <div className="card overflow-hidden">
-          {deployments.length === 0 ? (
-            <p className="p-6 text-slate-500 text-sm">Aucun déploiement.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-700/40">
-                  {['ID', 'Statut', 'Lancé par', 'Démarré', 'Terminé'].map((h) => (
-                    <th key={h} className="px-4 py-3 text-left text-xs text-slate-500 font-medium">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {deployments.map((d) => (
-                  <tr key={d.id} className="border-b border-slate-700/20 last:border-0 hover:bg-surface-200/30">
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{d.id.slice(0, 8)}</td>
-                    <td className="px-4 py-3"><StatusBadge status={d.status} size="sm" /></td>
-                    <td className="px-4 py-3 text-xs text-slate-400">
-                      {(d as any).triggeredByEmail ? (
-                        <span className="text-slate-300">{(d as any).triggeredByEmail}</span>
-                      ) : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-slate-400">{formatDate(d.createdAt)}</td>
-                    <td className="px-4 py-3 text-xs text-slate-400">
-                      {d.completedAt ? formatDate(d.completedAt) : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+        <DeploymentsTab
+          appId={id!}
+          deployments={deployments}
+          canDeploy={perms.canDeploy || isAdmin}
+          onRollback={async (imageTag) => {
+            if (!confirm(`Rollback vers l'image ${imageTag} ?`)) return;
+            try {
+              await appsApi.rollback(id!, imageTag);
+              toast.success('Rollback démarré');
+              qc.invalidateQueries({ queryKey: ['apps', id] });
+            } catch {
+              toast.error('Échec du rollback');
+            }
+          }}
+        />
       )}
     </div>
   );

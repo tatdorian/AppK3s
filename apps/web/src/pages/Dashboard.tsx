@@ -14,9 +14,8 @@ export function Dashboard() {
   const { data: apps = [], isLoading } = useApps();
   const { currentProjectId } = useProjectStore();
   const { user } = useAuthStore();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
 
-  // Projet courant
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: projectsApi.list,
@@ -24,7 +23,6 @@ export function Dashboard() {
   });
   const currentProject = (projects as Project[]).find((p) => p.id === currentProjectId);
 
-  // Filtrer les apps par projet
   const projectApps = useMemo(() => {
     if (currentProjectId === null) return apps;
     return apps.filter((a) => a.projectId === currentProjectId);

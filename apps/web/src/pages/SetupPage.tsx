@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Server, Shield, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Shield, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { authApi } from '../lib/api.js';
 import { useAuthStore } from '../store/auth.js';
+import { TigerBadge } from '../components/TigerLogo.js';
 import toast from 'react-hot-toast';
 
 interface Props {
@@ -22,6 +23,14 @@ export function SetupPage({ onComplete }: Props) {
     e.preventDefault();
     if (password !== confirm) { toast.error('Les mots de passe ne correspondent pas'); return; }
     if (password.length < 8)  { toast.error('Mot de passe : 8 caractères minimum'); return; }
+    if (!/[A-Z]/.test(password) || !/[a-z]/.test(password)) {
+      toast.error('Le mot de passe doit contenir au moins une majuscule et une minuscule');
+      return;
+    }
+    if (!/[0-9]/.test(password) && !/[^A-Za-z0-9]/.test(password)) {
+      toast.error('Le mot de passe doit contenir au moins un chiffre ou un caractère spécial');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -42,11 +51,9 @@ export function SetupPage({ onComplete }: Props) {
 
         {/* Logo + titre */}
         <div className="flex flex-col items-center gap-3 mb-8">
-          <div className="w-16 h-16 rounded-2xl bg-accent flex items-center justify-center shadow-lg shadow-accent/30">
-            <Server className="w-8 h-8 text-white" />
-          </div>
+          <TigerBadge size="lg" />
           <div className="text-center">
-            <h1 className="text-2xl font-bold text-white">Bienvenue sur AppK3s</h1>
+            <h1 className="text-2xl font-bold text-white">Bienvenue sur AK3s</h1>
             <p className="text-slate-400 text-sm mt-1">
               Première connexion — créez votre compte administrateur
             </p>

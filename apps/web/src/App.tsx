@@ -4,6 +4,7 @@ import { Layout } from './components/layout/Layout.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { SetupPage } from './pages/SetupPage.js';
 import { ChangePasswordPage } from './pages/ChangePasswordPage.js';
+import { SetPasswordPage } from './pages/SetPasswordPage.js';
 import { Dashboard } from './pages/Dashboard.js';
 import { AppsPage } from './pages/AppsPage.js';
 import { AppDetail } from './pages/AppDetail.js';
@@ -16,6 +17,11 @@ import { ProjectDetail } from './pages/ProjectDetail.js';
 import { ApiKeysPage } from './pages/ApiKeysPage.js';
 import { MonitoringPage } from './pages/MonitoringPage.js';
 import { NotificationsPage } from './pages/NotificationsPage.js';
+import { GitSourcesPage } from './pages/GitSourcesPage.js';
+import { GithubAppPage } from './pages/GithubAppPage.js';
+import { S3Page } from './pages/S3Page.js';
+import { GithubAppInstalledPage } from './pages/GithubAppInstalledPage.js';
+import { OAuthCallbackPage } from './pages/OAuthCallbackPage.js';
 import { useAuthStore } from './store/auth.js';
 import { authApi } from './lib/api.js';
 
@@ -28,7 +34,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function RequireAdmin({ children }: { children: React.ReactNode }) {
   const { user } = useAuthStore();
   if (!user) return <Navigate to="/" replace />;
-  if (user.role !== 'admin') return <Navigate to="/" replace />;
+  if (user.role !== 'admin' && user.role !== 'super-admin') return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -103,8 +109,13 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        {/* GitHub App OAuth callback — stores token and redirects to / */}
+        <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
         {/* /setup inaccessible une fois le compte créé */}
         <Route path="/setup" element={<Navigate to="/login" replace />} />
+
+        {/* Lien de création de mot de passe envoyé par email (public) */}
+        <Route path="/setup-password" element={<SetPasswordPage />} />
 
         {/* Changement de mot de passe forcé (compte par défaut) */}
         <Route
@@ -133,8 +144,12 @@ export default function App() {
 
           {/* Available to all authenticated users */}
           <Route path="api-keys"       element={<ApiKeysPage />} />
+          <Route path="s3"             element={<S3Page />} />
           <Route path="monitoring"     element={<MonitoringPage />} />
           <Route path="notifications"  element={<NotificationsPage />} />
+          <Route path="git-sources"    element={<GitSourcesPage />} />
+          <Route path="github-app"     element={<GithubAppPage />} />
+          <Route path="github-app/installed" element={<GithubAppInstalledPage />} />
 
           {/* Admin-only */}
           <Route path="nodes"          element={<RequireAdmin><NodesPage /></RequireAdmin>} />

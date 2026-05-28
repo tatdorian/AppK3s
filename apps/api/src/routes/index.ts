@@ -12,6 +12,10 @@ import { terminalRoutes }      from './terminal.js';
 import { notificationsRoutes } from './notifications.js';
 import { monitoringRoutes }    from './monitoring.js';
 import { backupsRoutes }       from './backups.js';
+import { gitRoutes }           from './git.js';
+import { webhooksRoutes }      from './webhooks.js';
+import { githubAppRoutes }     from './github-app.js';
+import { s3Routes }            from './s3.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   // ── Core ──────────────────────────────────────────────────────────────────
@@ -30,4 +34,10 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(notificationsRoutes, { prefix: '/api/notifications' });
   await app.register(monitoringRoutes,    { prefix: '/api/monitoring' });
   await app.register(backupsRoutes,       { prefix: '/api/backups' });
+
+  // ── Coolify-like Git deployment ───────────────────────────────────────────
+  await app.register(gitRoutes,           { prefix: '/api/git' });
+  await app.register(webhooksRoutes,      { prefix: '/api/webhooks' });
+  await app.register(githubAppRoutes,     { prefix: '/api/github-app' });
+  await app.register(s3Routes,            { prefix: '/api/s3' });
 }

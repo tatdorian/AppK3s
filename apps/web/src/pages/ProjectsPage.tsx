@@ -19,7 +19,7 @@ const ROLE_LABEL: Record<string, string> = {
 export function ProjectsPage() {
   const qc = useQueryClient();
   const { user } = useAuthStore();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
 
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ['projects'],

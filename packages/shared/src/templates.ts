@@ -9,6 +9,8 @@ export interface AppTemplate {
   defaults: Omit<CreateAppInput, 'name' | 'subdomain' | 'domain' | 'tlsEnabled' | 'namespace'>;
   docs?: string;
   requiredEnv?: string[]; // env vars the user must fill
+  /** true → ce service n'expose pas d'interface HTTP : la section Domaine/Ingress est masquée */
+  noIngress?: boolean;
 }
 
 export const TEMPLATES: AppTemplate[] = [
@@ -406,6 +408,7 @@ volumes:
     icon: '🐘',
     docs: 'https://hub.docker.com/_/postgres',
     requiredEnv: ['POSTGRES_PASSWORD'],
+    noIngress: true,
     defaults: {
       type: 'docker-image',
       image: 'postgres',
@@ -429,6 +432,7 @@ volumes:
     icon: '🐬',
     docs: 'https://hub.docker.com/_/mysql',
     requiredEnv: ['MYSQL_ROOT_PASSWORD'],
+    noIngress: true,
     defaults: {
       type: 'docker-image',
       image: 'mysql',
@@ -453,6 +457,7 @@ volumes:
     icon: '🦭',
     docs: 'https://hub.docker.com/_/mariadb',
     requiredEnv: ['MYSQL_ROOT_PASSWORD'],
+    noIngress: true,
     defaults: {
       type: 'docker-image',
       image: 'mariadb',
@@ -476,6 +481,7 @@ volumes:
     category: 'database',
     icon: '⚡',
     docs: 'https://hub.docker.com/_/redis',
+    noIngress: true,
     defaults: {
       type: 'docker-image',
       image: 'redis',
@@ -494,6 +500,7 @@ volumes:
     category: 'database',
     icon: '🍃',
     docs: 'https://hub.docker.com/_/mongo',
+    noIngress: true,
     defaults: {
       type: 'docker-image',
       image: 'mongo',
@@ -541,6 +548,7 @@ volumes:
     category: 'database',
     icon: '🔍',
     docs: 'https://hub.docker.com/_/elasticsearch',
+    noIngress: true,
     defaults: {
       type: 'docker-image',
       image: 'elasticsearch',
@@ -1047,6 +1055,37 @@ volumes:
       volumes: [
         { name: 'data', mountPath: '/opt/sonarqube/data', size: '10Gi' },
         { name: 'extensions', mountPath: '/opt/sonarqube/extensions', size: '5Gi' },
+      ],
+      replicas: 1,
+      ingressClass: 'traefik',
+    },
+  },
+  {
+    id: 'gitlab',
+    name: 'GitLab CE',
+    description: 'Plateforme DevOps tout-en-un : dépôts Git, CI/CD, registry, wiki et issues. L\'Omnibus intègre PostgreSQL, Redis et Nginx.',
+    category: 'devops',
+    icon: '🦊',
+    docs: 'https://hub.docker.com/r/gitlab/gitlab-ce',
+    requiredEnv: ['GITLAB_ROOT_PASSWORD'],
+    defaults: {
+      type: 'docker-image',
+      image: 'gitlab/gitlab-ce',
+      imageTag: 'latest',
+      ports: [
+        { containerPort: 80, protocol: 'TCP' },
+        { containerPort: 22, protocol: 'TCP' },
+      ],
+      envVars: [
+        // ⚠️  Remplacez gitlab.example.com par votre domaine public réel.
+        // nginx['listen_port']=80 et listen_https=false délèguent le TLS à Traefik.
+        { key: 'GITLAB_OMNIBUS_CONFIG', value: "external_url 'https://gitlab.example.com'; nginx['listen_port'] = 80; nginx['listen_https'] = false;" },
+        { key: 'GITLAB_ROOT_PASSWORD', value: 'changeme123' },
+      ],
+      volumes: [
+        { name: 'config', mountPath: '/etc/gitlab', size: '1Gi' },
+        { name: 'logs', mountPath: '/var/log/gitlab', size: '2Gi' },
+        { name: 'data', mountPath: '/var/opt/gitlab', size: '30Gi' },
       ],
       replicas: 1,
       ingressClass: 'traefik',
@@ -2439,6 +2478,73 @@ volumes:
     },
   },
   {
+    id: 'stack-gitlab',
+    name: 'GitLab CE + Runner',
+    description: 'GitLab CE Omnibus avec un GitLab Runner dédié pour les pipelines CI/CD.',
+    category: 'stack',
+    icon: '🦊',
+    docs: 'https://docs.gitlab.com/ee/install/docker.html',
+    requiredEnv: ['GITLAB_ROOT_PASSWORD', 'CI_SERVER_TOKEN'],
+    defaults: {
+      type: 'compose',
+      imageTag: 'latest',
+      ports: [],
+      envVars: [],
+      volumes: [],
+      replicas: 1,
+      ingressClass: 'traefik',
+      composeContent: `version: "3.8"
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    hostname: gitlab.example.com
+    ports:
+      - "80:80"
+      - "22:22"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'https://gitlab.example.com'
+        nginx['listen_port'] = 80
+        nginx['listen_https'] = false
+        gitlab_rails['initial_root_password'] = 'changeme123'
+        # Activer le registre intégré (optionnel)
+        # registry_external_url 'https://registry.example.com'
+    volumes:
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
+      - gitlab_data:/var/opt/gitlab
+
+  # ⚠️  Démarrer le runner APRÈS avoir récupéré le token dans
+  #     GitLab → Settings → CI/CD → Runners, puis relancer ce service.
+  runner:
+    image: gitlab/gitlab-runner:latest
+    depends_on:
+      - gitlab
+    environment:
+      # Remplacez par le token obtenu dans GitLab → Settings → CI/CD → Runners
+      CI_SERVER_TOKEN: REPLACE_WITH_YOUR_RUNNER_TOKEN
+      CI_SERVER_URL: http://gitlab
+    volumes:
+      - runner_config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - register
+      - --non-interactive
+      - --url=http://gitlab
+      - --token=$CI_SERVER_TOKEN
+      - --executor=docker
+      - --docker-image=alpine:latest
+      - --description=docker-runner
+
+volumes:
+  gitlab_config:
+  gitlab_logs:
+  gitlab_data:
+  runner_config:
+`,
+    },
+  },
+  {
     id: 'stack-paperless',
     name: 'Paperless-ngx + PostgreSQL + Redis',
     description: 'GED complète avec OCR, base de données et cache Redis.',
@@ -2573,6 +2679,7 @@ export const IMAGE_PORT_MAP: Record<string, number> = {
   'gogs/gogs': 3000,
   'drone/drone': 80,
   'gitlab/gitlab-ce': 80,
+  'gitlab/gitlab-runner': 8093,
   'jenkins/jenkins': 8080,
   'jenkins': 8080,
   'sonarqube': 9000,
